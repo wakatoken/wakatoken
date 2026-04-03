@@ -1,11 +1,12 @@
 {
-  "$schema": "https://raw.githubusercontent.com/nicegui/nicegui/main/tauri/schema/capability.json",
+  "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capability for WakaToken",
   "windows": ["settings"],
   "permissions": [
     "core:default",
     "shell:allow-open",
-    "opener:default"
+    "opener:default",
+    "updater:default"
   ]
 }

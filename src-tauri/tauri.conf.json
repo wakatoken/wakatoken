@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
   "productName": "WakaToken",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.wakatoken.client",
   "build": {
     "frontendDist": "../src"
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' https://wakatoken.pages.dev; script-src 'self'"
     }
   },
   "bundle": {
@@ -22,6 +22,15 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/wakatoken/wakatoken/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI2MTU0RTk5NUFCQkE2MkEKUldRcXBydGFtVTRWdHVjaW8zL3BrRmxUcC9vNjMzdnJjaGc1ZFZjMmVzem1NME41QWFaYVBZQVUK"
+    }
   }
 }

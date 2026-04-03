@@ -29,16 +29,25 @@ pub async fn send_heartbeats(
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_else(|e| format!("<body read error: {e}>"));
+            let body = resp
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("<body read error: {e}>"));
             return Err(format!("HTTP {status}: {body}"));
         }
 
         let result: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
         total_new += result.get("new").and_then(|v| v.as_u64()).unwrap_or(0);
-        total_dedup += result.get("deduplicated").and_then(|v| v.as_u64()).unwrap_or(0);
+        total_dedup += result
+            .get("deduplicated")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
     }
 
-    Ok(ReportResult { new_count: total_new, dedup_count: total_dedup })
+    Ok(ReportResult {
+        new_count: total_new,
+        dedup_count: total_dedup,
+    })
 }
 
 #[cfg(test)]

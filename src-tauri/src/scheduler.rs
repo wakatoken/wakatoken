@@ -39,11 +39,15 @@ pub fn new_shared_status() -> SharedStatus {
 fn emit_progress(app: &Option<AppHandle>, detail: &str) {
     if let Some(app) = app {
         crate::tray::set_status_text(app, detail);
-        app.emit("sync-progress", SyncProgress {
-            phase: "syncing".to_string(),
-            detail: detail.to_string(),
-            percent: 0,
-        }).ok();
+        app.emit(
+            "sync-progress",
+            SyncProgress {
+                phase: "syncing".to_string(),
+                detail: detail.to_string(),
+                percent: 0,
+            },
+        )
+        .ok();
     }
 }
 
@@ -88,7 +92,10 @@ pub async fn run_sync(
     }
 
     crate::tray::set_syncing(true);
-    emit_progress(app, &format!("Uploading {file_count} sessions ({msg_count} msgs)..."));
+    emit_progress(
+        app,
+        &format!("Uploading {file_count} sessions ({msg_count} msgs)..."),
+    );
 
     // 2. Upload per-session, commit offset after each succeeds
     let client = reqwest::Client::new();
@@ -100,7 +107,6 @@ pub async fn run_sync(
     let start = std::time::Instant::now();
 
     for (i, session) in all_sessions.iter().enumerate() {
-        let n = session.heartbeats.len();
         let eta = if i > 0 {
             let per_session = start.elapsed().as_secs_f64() / i as f64;
             let remaining = (file_count - i) as f64 * per_session;
@@ -112,7 +118,8 @@ pub async fn run_sync(
         emit_progress(app, &progress);
         eprintln!("[wakatoken] {progress}");
 
-        match reporter::send_heartbeats(&client, &config.api_key, session.heartbeats.clone()).await {
+        match reporter::send_heartbeats(&client, &config.api_key, session.heartbeats.clone()).await
+        {
             Ok(result) => {
                 // Find which collector owns this file and commit its offset
                 for c in collectors {
@@ -131,7 +138,10 @@ pub async fn run_sync(
             }
             Err(e) => {
                 // Skip failed session, its offset stays uncommitted so it'll retry next sync
-                eprintln!("[wakatoken] session {} failed, skipping: {e}", session.path.display());
+                eprintln!(
+                    "[wakatoken] session {} failed, skipping: {e}",
+                    session.path.display()
+                );
             }
         }
     }

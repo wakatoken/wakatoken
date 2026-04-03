@@ -44,7 +44,9 @@ mod tests {
 
     #[test]
     fn serializes_to_json_with_api_key_field() {
-        let config = AppConfig { api_key: "waka-test-key".to_string() };
+        let config = AppConfig {
+            api_key: "waka-test-key".to_string(),
+        };
         let json = serde_json::to_string(&config).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["api_key"].as_str().unwrap(), "waka-test-key");
@@ -66,7 +68,9 @@ mod tests {
 
     #[test]
     fn round_trips_api_key_through_json() {
-        let original = AppConfig { api_key: "round-trip-key".to_string() };
+        let original = AppConfig {
+            api_key: "round-trip-key".to_string(),
+        };
         let json = serde_json::to_string(&original).unwrap();
         let restored: AppConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.api_key, original.api_key);
@@ -77,7 +81,9 @@ mod tests {
         // Write to a temp file directly to avoid mutating real config.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
-        let config = AppConfig { api_key: "saved-key-123".to_string() };
+        let config = AppConfig {
+            api_key: "saved-key-123".to_string(),
+        };
         let json = serde_json::to_string_pretty(&config).unwrap();
         fs::write(&path, json).unwrap();
 
@@ -97,7 +103,9 @@ mod tests {
     fn save_writes_pretty_printed_json_with_api_key() {
         // Verify the serialization format by round-tripping through serde
         // without touching the real config path.
-        let config = AppConfig { api_key: "pretty-key".to_string() };
+        let config = AppConfig {
+            api_key: "pretty-key".to_string(),
+        };
         let json = serde_json::to_string_pretty(&config).unwrap();
         assert!(json.contains("api_key"));
         assert!(json.contains("pretty-key"));

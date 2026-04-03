@@ -1,7 +1,7 @@
 pub mod claude;
 
 use crate::heartbeat::Heartbeat;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// One session file's parse result.
 pub struct SessionFile {
@@ -15,7 +15,7 @@ pub trait Collector: Send + Sync {
     /// Scan and return session files with their heartbeats.
     fn collect(&self) -> Result<Vec<SessionFile>, String>;
     /// Commit offset for a single file after its heartbeats are uploaded.
-    fn commit_file(&self, path: &PathBuf, offset: u64);
+    fn commit_file(&self, path: &Path, offset: u64);
 }
 
 pub fn create_collectors() -> Vec<Box<dyn Collector>> {

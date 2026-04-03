@@ -10,8 +10,10 @@ use std::sync::Mutex;
 const SKIP_DIRS: &[&str] = &["cache", "marketplaces", "fixtures"];
 
 const EXT_LANGUAGES: &[(&str, &str)] = &[
-    (".ts", "TypeScript"), (".tsx", "TypeScript"),
-    (".js", "JavaScript"), (".jsx", "JavaScript"),
+    (".ts", "TypeScript"),
+    (".tsx", "TypeScript"),
+    (".js", "JavaScript"),
+    (".jsx", "JavaScript"),
     (".py", "Python"),
     (".go", "Go"),
     (".rs", "Rust"),
@@ -20,18 +22,26 @@ const EXT_LANGUAGES: &[(&str, &str)] = &[
     (".php", "PHP"),
     (".swift", "Swift"),
     (".kt", "Kotlin"),
-    (".c", "C"), (".h", "C"),
-    (".cpp", "C++"), (".cc", "C++"), (".hpp", "C++"),
+    (".c", "C"),
+    (".h", "C"),
+    (".cpp", "C++"),
+    (".cc", "C++"),
+    (".hpp", "C++"),
     (".cs", "C#"),
     (".vue", "Vue"),
     (".svelte", "Svelte"),
     (".html", "HTML"),
-    (".css", "CSS"), (".scss", "CSS"), (".less", "CSS"),
+    (".css", "CSS"),
+    (".scss", "CSS"),
+    (".less", "CSS"),
     (".json", "JSON"),
-    (".yaml", "YAML"), (".yml", "YAML"),
+    (".yaml", "YAML"),
+    (".yml", "YAML"),
     (".md", "Markdown"),
     (".sql", "SQL"),
-    (".sh", "Shell"), (".bash", "Shell"), (".zsh", "Shell"),
+    (".sh", "Shell"),
+    (".bash", "Shell"),
+    (".zsh", "Shell"),
     (".toml", "TOML"),
     (".xml", "XML"),
 ];
@@ -39,6 +49,12 @@ const EXT_LANGUAGES: &[(&str, &str)] = &[
 pub struct ClaudeCollector {
     offsets: Mutex<HashMap<PathBuf, u64>>,
     offsets_path: PathBuf,
+}
+
+impl Default for ClaudeCollector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ClaudeCollector {
@@ -111,9 +127,9 @@ impl Collector for ClaudeCollector {
         Ok(sessions)
     }
 
-    fn commit_file(&self, path: &PathBuf, offset: u64) {
+    fn commit_file(&self, path: &Path, offset: u64) {
         let mut offsets = self.offsets.lock().unwrap();
-        offsets.insert(path.clone(), offset);
+        offsets.insert(path.to_path_buf(), offset);
         save_offsets(&self.offsets_path, &offsets);
     }
 }
@@ -153,7 +169,8 @@ fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, 
     let file_len = file.metadata().map_err(|e| e.to_string())?.len();
     let seek_to = if offset > file_len { 0 } else { offset };
 
-    file.seek(SeekFrom::Start(seek_to)).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(seek_to))
+        .map_err(|e| e.to_string())?;
 
     let hostname = hostname::get()
         .map(|h| h.to_string_lossy().to_string())
@@ -196,8 +213,14 @@ fn parse_line(line: &str, hostname: &str, platform: &str) -> Option<(String, Hea
     let message = record.get("message")?;
     let usage = message.get("usage")?;
 
-    let input_tokens = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-    let output_tokens = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+    let input_tokens = usage
+        .get("input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("output_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     if input_tokens == 0 && output_tokens == 0 {
         return None;
     }
@@ -209,7 +232,10 @@ fn parse_line(line: &str, hostname: &str, platform: &str) -> Option<(String, Hea
         .filter(|&ts| ts > 0)?;
 
     let msg_id = message.get("id").and_then(|v| v.as_str()).unwrap_or("");
-    let request_id = record.get("requestId").and_then(|v| v.as_str()).unwrap_or("");
+    let request_id = record
+        .get("requestId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if msg_id.is_empty() && request_id.is_empty() {
         return None;
     }
@@ -217,28 +243,40 @@ fn parse_line(line: &str, hostname: &str, platform: &str) -> Option<(String, Hea
 
     let cwd = record.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
     let model = message.get("model").and_then(|v| v.as_str()).unwrap_or("");
-    let git_branch = record.get("gitBranch").and_then(|v| v.as_str()).unwrap_or("");
+    let git_branch = record
+        .get("gitBranch")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let content = message.get("content").and_then(|v| v.as_array());
 
     let (tool, language) = extract_tool_and_language(content);
 
-    Some((dedup_key.clone(), Heartbeat {
-        event_id: dedup_key,
-        project: extract_project(cwd),
-        provider: extract_provider(model),
-        model: model.to_string(),
-        source: "claude-code".to_string(),
-        os: platform.to_string(),
-        machine: hostname.to_string(),
-        git_branch: git_branch.to_string(),
-        language,
-        tool,
-        input_tokens,
-        output_tokens,
-        cache_read_tokens: usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-        cache_write_tokens: usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-        event_ts,
-    }))
+    Some((
+        dedup_key.clone(),
+        Heartbeat {
+            event_id: dedup_key,
+            project: extract_project(cwd),
+            provider: extract_provider(model),
+            model: model.to_string(),
+            source: "claude-code".to_string(),
+            os: platform.to_string(),
+            machine: hostname.to_string(),
+            git_branch: git_branch.to_string(),
+            language,
+            tool,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens: usage
+                .get("cache_read_input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            cache_write_tokens: usage
+                .get("cache_creation_input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            event_ts,
+        },
+    ))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -259,7 +297,11 @@ fn extract_tool_and_language(content: Option<&Vec<Value>>) -> (String, String) {
         if let Some(name) = block.get("name").and_then(|v| v.as_str()) {
             *tool_counts.entry(name).or_default() += 1;
         }
-        if let Some(file_path) = block.get("input").and_then(|v| v.get("file_path")).and_then(|v| v.as_str()) {
+        if let Some(file_path) = block
+            .get("input")
+            .and_then(|v| v.get("file_path"))
+            .and_then(|v| v.as_str())
+        {
             if let Some(ext) = Path::new(file_path).extension().and_then(|e| e.to_str()) {
                 let dot_ext = format!(".{}", ext.to_lowercase());
                 for &(e, lang) in EXT_LANGUAGES {
@@ -272,8 +314,16 @@ fn extract_tool_and_language(content: Option<&Vec<Value>>) -> (String, String) {
         }
     }
 
-    let top_tool = tool_counts.into_iter().max_by_key(|e| e.1).map(|e| e.0.to_string()).unwrap_or_default();
-    let top_lang = lang_counts.into_iter().max_by_key(|e| e.1).map(|e| e.0.to_string()).unwrap_or_default();
+    let top_tool = tool_counts
+        .into_iter()
+        .max_by_key(|e| e.1)
+        .map(|e| e.0.to_string())
+        .unwrap_or_default();
+    let top_lang = lang_counts
+        .into_iter()
+        .max_by_key(|e| e.1)
+        .map(|e| e.0.to_string())
+        .unwrap_or_default();
     (top_tool, top_lang)
 }
 
@@ -287,7 +337,11 @@ fn extract_project(cwd: &str) -> String {
 fn extract_provider(model: &str) -> String {
     if model.starts_with("claude") {
         "anthropic".to_string()
-    } else if model.starts_with("gpt") || model.starts_with("o1") || model.starts_with("o3") || model.starts_with("o4") {
+    } else if model.starts_with("gpt")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
+    {
         "openai".to_string()
     } else {
         "unknown".to_string()
@@ -337,7 +391,8 @@ mod tests {
                 "content": [],
                 "usage": { "input_tokens": input, "output_tokens": output }
             }
-        }).to_string()
+        })
+        .to_string()
     }
 
     #[test]
@@ -363,7 +418,9 @@ mod tests {
 
     fn write_temp_jsonl(lines: &[&str]) -> tempfile::NamedTempFile {
         let mut f = tempfile::NamedTempFile::new().unwrap();
-        for l in lines { writeln!(f, "{}", l).unwrap(); }
+        for l in lines {
+            writeln!(f, "{}", l).unwrap();
+        }
         f
     }
 
@@ -396,7 +453,9 @@ mod tests {
     #[test]
     fn real_jsonl_parses_without_errors() {
         let claude_dir = dirs::home_dir().unwrap().join(".claude").join("projects");
-        if !claude_dir.exists() { return; }
+        if !claude_dir.exists() {
+            return;
+        }
 
         let files = find_jsonl_files(&claude_dir);
         let mut total = 0usize;

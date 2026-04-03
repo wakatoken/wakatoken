@@ -12,7 +12,11 @@ fn collect_and_report_smoke() {
         }
     }
     let msg_count: usize = all_sessions.iter().map(|s| s.heartbeats.len()).sum();
-    eprintln!("Found {} session files, {} messages", all_sessions.len(), msg_count);
+    eprintln!(
+        "Found {} session files, {} messages",
+        all_sessions.len(),
+        msg_count
+    );
 
     if all_sessions.is_empty() {
         eprintln!("Nothing to upload");
@@ -30,9 +34,15 @@ fn collect_and_report_smoke() {
     let client = reqwest::Client::new();
     for (i, session) in all_sessions.iter().take(3).enumerate() {
         let n = session.heartbeats.len();
-        eprintln!("Uploading file {}/{} ({n} msgs)...", i + 1, all_sessions.len().min(3));
+        eprintln!(
+            "Uploading file {}/{} ({n} msgs)...",
+            i + 1,
+            all_sessions.len().min(3)
+        );
         let result = rt.block_on(wakatoken_client_lib::reporter::send_heartbeats(
-            &client, &config.api_key, session.heartbeats.clone(),
+            &client,
+            &config.api_key,
+            session.heartbeats.clone(),
         ));
         match result {
             Ok(r) => {

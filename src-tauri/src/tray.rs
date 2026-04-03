@@ -1,10 +1,10 @@
 use crate::scheduler::{SharedStatus, SyncStatus};
+use std::sync::Mutex;
 use tauri::image::Image;
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
-use std::sync::Mutex;
 
 const TRAY_ID: &str = "main-tray";
 const TRAY_ICON: &[u8] = include_bytes!("../icons/tray-icon@2x.png");
@@ -34,24 +34,25 @@ pub fn create_tray(app: &AppHandle, status: &SharedStatus) -> Result<(), String>
         .icon_as_template(true)
         .tooltip("WakaToken")
         .menu(&menu)
-        .on_menu_event(move |app, event| {
-            match event.id().as_ref() {
-                "sync_now" => {
-                    let status = status_clone.clone();
-                    let app_clone = app.clone();
-                    let collectors: std::sync::Arc<Vec<Box<dyn crate::collector::Collector>>> =
-                        app.state::<std::sync::Arc<Vec<Box<dyn crate::collector::Collector>>>>().inner().clone();
-                    tauri::async_runtime::spawn(async move {
-                        crate::scheduler::run_sync(&Some(app_clone.clone()), &collectors, &status).await;
-                        let s = status.lock().await;
-                        update_tray(&app_clone, &s).ok();
-                    });
-                }
-                "dashboard" => open_url(app, &dashboard_url()),
-                "settings" => open_settings_window(app),
-                "quit" => std::process::exit(0),
-                _ => {}
+        .on_menu_event(move |app, event| match event.id().as_ref() {
+            "sync_now" => {
+                let status = status_clone.clone();
+                let app_clone = app.clone();
+                let collectors: std::sync::Arc<Vec<Box<dyn crate::collector::Collector>>> = app
+                    .state::<std::sync::Arc<Vec<Box<dyn crate::collector::Collector>>>>()
+                    .inner()
+                    .clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::scheduler::run_sync(&Some(app_clone.clone()), &collectors, &status)
+                        .await;
+                    let s = status.lock().await;
+                    update_tray(&app_clone, &s).ok();
+                });
             }
+            "dashboard" => open_url(app, &dashboard_url()),
+            "settings" => open_settings_window(app),
+            "quit" => std::process::exit(0),
+            _ => {}
         })
         .build(app)
         .map_err(|e| e.to_string())?;
@@ -68,9 +69,24 @@ pub fn update_tray(app: &AppHandle, status: &SyncStatus) -> Result<(), String> {
     if let Ok(guard) = MENU_ITEMS.lock() {
         if let Some(items) = guard.as_ref() {
             let total = status.today_input_tokens + status.today_output_tokens;
-            items.today_total.set_text(format!("Today: {}", format_tokens(total))).ok();
-            items.today_input.set_text(format!("  Input:  {}", format_tokens(status.today_input_tokens))).ok();
-            items.today_output.set_text(format!("  Output: {}", format_tokens(status.today_output_tokens))).ok();
+            items
+                .today_total
+                .set_text(format!("Today: {}", format_tokens(total)))
+                .ok();
+            items
+                .today_input
+                .set_text(format!(
+                    "  Input:  {}",
+                    format_tokens(status.today_input_tokens)
+                ))
+                .ok();
+            items
+                .today_output
+                .set_text(format!(
+                    "  Output: {}",
+                    format_tokens(status.today_output_tokens)
+                ))
+                .ok();
             items.sync_status.set_text(format_status_line(status)).ok();
         }
     }
@@ -100,12 +116,30 @@ pub fn set_syncing(syncing: bool) {
     }
 }
 
-fn build_menu(app: &AppHandle, status: &SyncStatus) -> Result<(tauri::menu::Menu<tauri::Wry>, TrayMenuItems), String> {
+fn build_menu(
+    app: &AppHandle,
+    status: &SyncStatus,
+) -> Result<(tauri::menu::Menu<tauri::Wry>, TrayMenuItems), String> {
     let total = status.today_input_tokens + status.today_output_tokens;
 
-    let today_total = mi(app, "today_total", format!("Today: {}", format_tokens(total)), false)?;
-    let today_input = mi(app, "today_input", format!("  Input:  {}", format_tokens(status.today_input_tokens)), false)?;
-    let today_output = mi(app, "today_output", format!("  Output: {}", format_tokens(status.today_output_tokens)), false)?;
+    let today_total = mi(
+        app,
+        "today_total",
+        format!("Today: {}", format_tokens(total)),
+        false,
+    )?;
+    let today_input = mi(
+        app,
+        "today_input",
+        format!("  Input:  {}", format_tokens(status.today_input_tokens)),
+        false,
+    )?;
+    let today_output = mi(
+        app,
+        "today_output",
+        format!("  Output: {}", format_tokens(status.today_output_tokens)),
+        false,
+    )?;
     let sync_status = mi(app, "sync_status", format_status_line(status), false)?;
 
     let sync_now = mi(app, "sync_now", "Sync Now".to_string(), true)?;
@@ -125,11 +159,22 @@ fn build_menu(app: &AppHandle, status: &SyncStatus) -> Result<(tauri::menu::Menu
         .build()
         .map_err(|e| e.to_string())?;
 
-    let items = TrayMenuItems { today_total, today_input, today_output, sync_status, sync_now };
+    let items = TrayMenuItems {
+        today_total,
+        today_input,
+        today_output,
+        sync_status,
+        sync_now,
+    };
     Ok((menu, items))
 }
 
-fn mi(app: &AppHandle, id: &str, label: String, enabled: bool) -> Result<MenuItem<tauri::Wry>, String> {
+fn mi(
+    app: &AppHandle,
+    id: &str,
+    label: String,
+    enabled: bool,
+) -> Result<MenuItem<tauri::Wry>, String> {
     MenuItemBuilder::with_id(id, label)
         .enabled(enabled)
         .build(app)
@@ -140,7 +185,11 @@ fn format_status_line(status: &SyncStatus) -> String {
     if status.last_sync_ts == 0 {
         "Not synced yet".to_string()
     } else if status.last_sync_ok {
-        format!("Synced {} · {}", format_count(status.total_synced), format_time_ago(status.last_sync_ts))
+        format!(
+            "Synced {} · {}",
+            format_count(status.total_synced),
+            format_time_ago(status.last_sync_ts)
+        )
     } else {
         format!("Sync failed: {}", truncate(&status.last_error, 40))
     }
@@ -151,7 +200,11 @@ fn format_tooltip(status: &SyncStatus) -> String {
     if status.last_sync_ts == 0 {
         "WakaToken".to_string()
     } else {
-        format!("WakaToken — Today {} | {}", format_tokens(total), format_time_ago(status.last_sync_ts))
+        format!(
+            "WakaToken — Today {} | {}",
+            format_tokens(total),
+            format_time_ago(status.last_sync_ts)
+        )
     }
 }
 
@@ -190,7 +243,11 @@ fn format_time_ago(ts: i64) -> String {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { format!("{}...", &s[..max]) }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max])
+    }
 }
 
 fn open_url(app: &AppHandle, url: &str) {

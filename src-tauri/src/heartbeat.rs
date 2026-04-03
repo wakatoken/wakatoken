@@ -48,8 +48,14 @@ mod tests {
     fn serializes_event_id_as_camel_case() {
         let hb = sample_heartbeat();
         let json: serde_json::Value = serde_json::to_value(&hb).unwrap();
-        assert!(json.get("eventId").is_some(), "expected camelCase 'eventId'");
-        assert!(json.get("event_id").is_none(), "snake_case 'event_id' must not appear");
+        assert!(
+            json.get("eventId").is_some(),
+            "expected camelCase 'eventId'"
+        );
+        assert!(
+            json.get("event_id").is_none(),
+            "snake_case 'event_id' must not appear"
+        );
     }
 
     #[test]
@@ -57,9 +63,21 @@ mod tests {
         let hb = sample_heartbeat();
         let json: serde_json::Value = serde_json::to_value(&hb).unwrap();
         let expected_keys = [
-            "eventId", "project", "provider", "model", "source", "os",
-            "machine", "gitBranch", "language", "tool",
-            "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "eventTs",
+            "eventId",
+            "project",
+            "provider",
+            "model",
+            "source",
+            "os",
+            "machine",
+            "gitBranch",
+            "language",
+            "tool",
+            "inputTokens",
+            "outputTokens",
+            "cacheReadTokens",
+            "cacheWriteTokens",
+            "eventTs",
         ];
         for key in &expected_keys {
             assert!(json.get(key).is_some(), "missing camelCase key: {key}");

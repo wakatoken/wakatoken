@@ -53,7 +53,9 @@ async fn test_api_key(api_key: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn get_sync_status(state: tauri::State<'_, scheduler::SharedStatus>) -> Result<SyncStatus, String> {
+async fn get_sync_status(
+    state: tauri::State<'_, scheduler::SharedStatus>,
+) -> Result<SyncStatus, String> {
     let s = state.lock().await;
     Ok(s.clone())
 }
@@ -81,6 +83,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(status)
         .manage(collectors)
         .invoke_handler(tauri::generate_handler![
@@ -97,7 +100,11 @@ pub fn run() {
 
             tray::create_tray(&app.handle().clone(), &status_for_tray)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-            scheduler::start_periodic_sync(app.handle().clone(), collectors_for_scheduler, status_for_scheduler);
+            scheduler::start_periodic_sync(
+                app.handle().clone(),
+                collectors_for_scheduler,
+                status_for_scheduler,
+            );
             Ok(())
         })
         .build(tauri::generate_context!())
