@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WakaToken Settings</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>WakaToken</h1>
+      <span class="version">v0.1.0</span>
+    </header>
+
+    <section class="stats-card">
+      <div class="stats-row">
+        <div class="stat">
+          <span class="stat-value" id="stat-input">-</span>
+          <span class="stat-label">Input</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="stat-output">-</span>
+          <span class="stat-label">Output</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="stat-total">-</span>
+          <span class="stat-label">Synced</span>
+        </div>
+      </div>
+      <div class="stats-footer" id="stats-footer">Not synced yet</div>
+    </section>
+
+    <section class="settings">
+      <div class="field">
+        <label for="api-key">API Key</label>
+        <div class="input-group">
+          <input type="password" id="api-key" placeholder="wk_xxx" spellcheck="false" autocomplete="off">
+          <button id="toggle-key" class="icon-btn" title="Show/hide">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3C4.5 3 1.7 5.1 0.5 8c1.2 2.9 4 5 7.5 5s6.3-2.1 7.5-5c-1.2-2.9-4-5-7.5-5zm0 8.5c-1.9 0-3.5-1.6-3.5-3.5S6.1 4.5 8 4.5s3.5 1.6 3.5 3.5S9.9 11.5 8 11.5zm0-5.5C6.9 6 6 6.9 6 8s.9 2 2 2 2-.9 2-2-.9-2-2-2z" fill="currentColor"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="save-btn">Save</button>
+        <button id="test-btn" class="secondary">Test Connection</button>
+      </div>
+
+      <div id="test-result" class="test-result"></div>
+    </section>
+
+    <footer class="footer">
+      <a href="#" id="dashboard-link">Open Dashboard</a>
+      <span class="dot">·</span>
+      <a href="#" id="docs-link">Docs</a>
+    </footer>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

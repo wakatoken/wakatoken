@@ -1,0 +1,7 @@
+node_modules/
+src-tauri/target/
+dist/
+app-icon.png
+app-icon.svg
+tray-icon.svg
+src-tauri/gen/
