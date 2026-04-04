@@ -12,7 +12,16 @@ A lightweight desktop app that tracks your AI coding assistant token usage. Runs
 
 ## Install
 
-Download the latest release from the [Releases page](https://github.com/wakatoken/wakatoken/releases/latest).
+### macOS (Homebrew)
+
+```bash
+brew tap wakatoken/tap
+brew install --cask wakatoken
+```
+
+### Manual Download
+
+Download from the [Releases page](https://github.com/wakatoken/wakatoken/releases/latest).
 
 | Platform | File |
 |---|---|

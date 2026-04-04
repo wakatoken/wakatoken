@@ -79,3 +79,4 @@ jobs:
           releaseDraft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.rust-target != '' && format('--target {0}', matrix.rust-target) || '' }}
+
