@@ -10,7 +10,7 @@ use scheduler::SyncStatus;
 use std::sync::Arc;
 use tauri::RunEvent;
 
-pub const BASE_URL: &str = "https://wakatoken.pages.dev";
+pub const BASE_URL: &str = "https://wkt.tftt.cc";
 
 type SharedCollectors = Arc<Vec<Box<dyn collector::Collector>>>;
 

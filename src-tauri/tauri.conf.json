@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' https://wakatoken.pages.dev; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' https://wkt.tftt.cc; script-src 'self'"
     }
   },
   "bundle": {

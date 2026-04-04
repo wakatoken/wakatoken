@@ -1,6 +1,6 @@
 # WakaToken
 
-A lightweight desktop app that tracks your AI coding assistant token usage. Runs silently in the system tray, collects usage data from Claude Code, and syncs to the [WakaToken dashboard](https://wakatoken.pages.dev).
+A lightweight desktop app that tracks your AI coding assistant token usage. Runs silently in the system tray, collects usage data from Claude Code, and syncs to the [WakaToken dashboard](https://wkt.tftt.cc).
 
 ## Features
 
@@ -27,7 +27,7 @@ Download the latest release from the [Releases page](https://github.com/wakatoke
 
 1. Launch WakaToken - it appears as a tray icon
 2. Click the tray icon -> **Settings...**
-3. Enter your API key (get one from [wakatoken.pages.dev](https://wakatoken.pages.dev))
+3. Enter your API key (get one from [wkt.tftt.cc](https://wkt.tftt.cc))
 4. Click **Test Connection** to verify, then **Save**
 
 The app will start syncing your Claude Code token usage automatically.
