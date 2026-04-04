@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Token coin outer ring -->
+  <circle cx="256" cy="256" r="220" fill="none" stroke="black" stroke-width="28"/>
+
+  <!-- Token coin inner ring -->
+  <circle cx="256" cy="256" r="184" fill="none" stroke="black" stroke-width="6" opacity="0.4"/>
+
+  <!-- Usage chart / pulse line -->
+  <polyline
+    points="80,330 150,330 188,282 224,306 260,216 296,248 332,156 368,180 432,108"
+    fill="none"
+    stroke="black"
+    stroke-width="32"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Dot at chart tip -->
+  <circle cx="432" cy="108" r="22" fill="black"/>
+</svg>
