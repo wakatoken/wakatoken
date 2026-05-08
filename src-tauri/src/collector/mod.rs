@@ -1,6 +1,6 @@
 pub mod claude;
-pub mod copilot;
 pub mod codex;
+pub mod copilot;
 pub mod gemini;
 
 use crate::heartbeat::Heartbeat;

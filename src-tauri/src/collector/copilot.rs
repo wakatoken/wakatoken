@@ -323,7 +323,11 @@ fn parse_line(
         });
     }
 
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 fn extract_project(cwd: &str) -> String {

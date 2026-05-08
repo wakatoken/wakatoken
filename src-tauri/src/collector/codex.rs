@@ -457,8 +457,14 @@ mod tests {
         let mut ctx = SessionContext::default();
         parse_line(&session_meta_json(), "e0", "host", "macos", &mut ctx);
 
-        let hb = parse_line(&token_count_json(120, 40, 30), "e1", "host", "macos", &mut ctx)
-            .expect("expected token heartbeat");
+        let hb = parse_line(
+            &token_count_json(120, 40, 30),
+            "e1",
+            "host",
+            "macos",
+            &mut ctx,
+        )
+        .expect("expected token heartbeat");
         assert_eq!(hb.project, "myproject");
         assert_eq!(hb.provider, "openai");
         assert_eq!(hb.git_branch, "main");
@@ -471,7 +477,13 @@ mod tests {
     fn parse_line_uses_model_from_non_token_event_context() {
         let mut ctx = SessionContext::default();
         parse_line(&session_meta_json(), "e0", "host", "macos", &mut ctx);
-        parse_line(&model_event_json("gpt-5.5"), "e1", "host", "macos", &mut ctx);
+        parse_line(
+            &model_event_json("gpt-5.5"),
+            "e1",
+            "host",
+            "macos",
+            &mut ctx,
+        );
 
         let hb = parse_line(&token_count_json(10, 5, 2), "e2", "host", "macos", &mut ctx)
             .expect("expected token heartbeat");

@@ -165,7 +165,9 @@ fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, 
         bytes_read += n as u64;
 
         let event_fallback = format!("{}:{line_start}", path.display());
-        if let Some(hb) = parse_message_record(&line, &event_fallback, &project, &hostname, platform) {
+        if let Some(hb) =
+            parse_message_record(&line, &event_fallback, &project, &hostname, platform)
+        {
             dedup.insert(hb.event_id.clone(), hb);
         }
     }
