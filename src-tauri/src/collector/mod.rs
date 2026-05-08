@@ -1,6 +1,7 @@
 pub mod claude;
 pub mod copilot;
 pub mod codex;
+pub mod gemini;
 
 use crate::heartbeat::Heartbeat;
 use std::path::{Path, PathBuf};
@@ -25,6 +26,7 @@ pub fn create_collectors() -> Vec<Box<dyn Collector>> {
         Box::new(claude::ClaudeCollector::new()),
         Box::new(codex::CodexCollector::new()),
         Box::new(copilot::CopilotCollector::new()),
+        Box::new(gemini::GeminiCollector::new()),
     ]
 }
 
@@ -54,5 +56,11 @@ mod tests {
     fn create_collectors_contains_copilot_agent() {
         let collectors = create_collectors();
         assert!(collectors.iter().any(|c| c.name() == "copilot-agent"));
+    }
+
+    #[test]
+    fn create_collectors_contains_gemini_cli() {
+        let collectors = create_collectors();
+        assert!(collectors.iter().any(|c| c.name() == "gemini-cli"));
     }
 }
