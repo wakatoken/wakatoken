@@ -1,4 +1,5 @@
 pub mod claude;
+pub mod codex;
 
 use crate::heartbeat::Heartbeat;
 use std::path::{Path, PathBuf};
@@ -19,7 +20,10 @@ pub trait Collector: Send + Sync {
 }
 
 pub fn create_collectors() -> Vec<Box<dyn Collector>> {
-    vec![Box::new(claude::ClaudeCollector::new())]
+    vec![
+        Box::new(claude::ClaudeCollector::new()),
+        Box::new(codex::CodexCollector::new()),
+    ]
 }
 
 #[cfg(test)]
@@ -36,5 +40,11 @@ mod tests {
     fn create_collectors_first_entry_is_claude_code() {
         let collectors = create_collectors();
         assert_eq!(collectors[0].name(), "claude-code");
+    }
+
+    #[test]
+    fn create_collectors_contains_codex_cli() {
+        let collectors = create_collectors();
+        assert!(collectors.iter().any(|c| c.name() == "codex-cli"));
     }
 }
