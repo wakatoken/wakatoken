@@ -55,7 +55,7 @@ impl Collector for GeminiCollector {
         "gemini-cli"
     }
 
-    fn collect(&self) -> Result<Vec<SessionFile>, String> {
+    fn collect(&self, machine_id: &str) -> Result<Vec<SessionFile>, String> {
         let root = dirs::home_dir()
             .ok_or("cannot find home directory")?
             .join(".gemini")
@@ -71,7 +71,7 @@ impl Collector for GeminiCollector {
 
         for file in &files {
             let prev_offset = offsets.get(file).copied().unwrap_or(0);
-            match parse_file_incremental(file, prev_offset) {
+            match parse_file_incremental(file, prev_offset, machine_id) {
                 Ok((heartbeats, new_offset)) => {
                     if !heartbeats.is_empty() {
                         sessions.push(SessionFile {
@@ -127,16 +127,24 @@ fn walk(dir: &Path, depth: u32, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn parse_file_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, u64), String> {
+fn parse_file_incremental(
+    path: &Path,
+    offset: u64,
+    machine_id: &str,
+) -> Result<(Vec<Heartbeat>, u64), String> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     if ext == "jsonl" {
-        parse_jsonl_incremental(path, offset)
+        parse_jsonl_incremental(path, offset, machine_id)
     } else {
-        parse_json_snapshot(path, offset)
+        parse_json_snapshot(path, offset, machine_id)
     }
 }
 
-fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, u64), String> {
+fn parse_jsonl_incremental(
+    path: &Path,
+    offset: u64,
+    machine_id: &str,
+) -> Result<(Vec<Heartbeat>, u64), String> {
     let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
     let file_len = file.metadata().map_err(|e| e.to_string())?.len();
     let seek_to = if offset > file_len { 0 } else { offset };
@@ -144,9 +152,6 @@ fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, 
     file.seek(SeekFrom::Start(seek_to))
         .map_err(|e| e.to_string())?;
 
-    let hostname = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_default();
     let platform = std::env::consts::OS;
     let project = extract_project(path);
 
@@ -166,7 +171,7 @@ fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, 
 
         let event_fallback = format!("{}:{line_start}", path.display());
         if let Some(hb) =
-            parse_message_record(&line, &event_fallback, &project, &hostname, platform)
+            parse_message_record(&line, &event_fallback, &project, &machine_id, platform)
         {
             dedup.insert(hb.event_id.clone(), hb);
         }
@@ -175,7 +180,11 @@ fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, 
     Ok((dedup.into_values().collect(), bytes_read))
 }
 
-fn parse_json_snapshot(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, u64), String> {
+fn parse_json_snapshot(
+    path: &Path,
+    offset: u64,
+    machine_id: &str,
+) -> Result<(Vec<Heartbeat>, u64), String> {
     let file_len = fs::metadata(path).map_err(|e| e.to_string())?.len();
     if file_len == offset {
         return Ok((vec![], file_len));
@@ -188,16 +197,14 @@ fn parse_json_snapshot(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, u64)
         .and_then(|v| v.as_array())
         .ok_or("invalid gemini session json: missing messages")?;
 
-    let hostname = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_default();
     let platform = std::env::consts::OS;
     let project = extract_project(path);
     let mut dedup: HashMap<String, Heartbeat> = HashMap::new();
 
     for (idx, msg) in messages.iter().enumerate() {
         let event_fallback = format!("{}:{idx}", path.display());
-        if let Some(hb) = parse_message_value(msg, &event_fallback, &project, &hostname, platform) {
+        if let Some(hb) = parse_message_value(msg, &event_fallback, &project, &machine_id, platform)
+        {
             dedup.insert(hb.event_id.clone(), hb);
         }
     }
@@ -209,7 +216,7 @@ fn parse_message_record(
     line: &str,
     event_fallback: &str,
     project: &str,
-    hostname: &str,
+    machine_id: &str,
     platform: &str,
 ) -> Option<Heartbeat> {
     let trimmed = line.trim();
@@ -217,14 +224,14 @@ fn parse_message_record(
         return None;
     }
     let record: Value = serde_json::from_str(trimmed).ok()?;
-    parse_message_value(&record, event_fallback, project, hostname, platform)
+    parse_message_value(&record, event_fallback, project, machine_id, platform)
 }
 
 fn parse_message_value(
     record: &Value,
     event_fallback: &str,
     project: &str,
-    hostname: &str,
+    machine_id: &str,
     platform: &str,
 ) -> Option<Heartbeat> {
     if record.get("type").and_then(|v| v.as_str()) != Some("gemini") {
@@ -265,7 +272,7 @@ fn parse_message_value(
         model,
         source: "gemini-cli".to_string(),
         os: platform.to_string(),
-        machine: hostname.to_string(),
+        machine_id: machine_id.to_string(),
         git_branch: String::new(),
         language: String::new(),
         tool: String::new(),

@@ -85,56 +85,10 @@ body {
   gap: 16px;
 }
 
-.field label {
-  display: block;
-  font-size: 13px;
-  font-weight: 500;
-  color: #6e6e73;
-  margin-bottom: 6px;
-}
-
-.input-group {
-  position: relative;
-}
-
-.input-group input {
-  width: 100%;
-  padding: 10px 40px 10px 12px;
-  font-size: 14px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  border: 1px solid #d2d2d7;
-  border-radius: 8px;
-  background: #fff;
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-.input-group input:focus {
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
-}
-
-.icon-btn {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  background: none;
-  border: none;
-  padding: 4px;
-  color: #8e8e93;
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.icon-btn:hover {
-  color: #6366f1;
-  background: rgba(99, 102, 241, 0.08);
-}
-
-.actions {
+.device-auth {
   display: flex;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
 }
 
 button {

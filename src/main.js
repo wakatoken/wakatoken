@@ -2,21 +2,29 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { open } = window.__TAURI__.shell;
 
-const apiKeyInput = document.getElementById("api-key");
-const saveBtn = document.getElementById("save-btn");
-const testBtn = document.getElementById("test-btn");
-const toggleKeyBtn = document.getElementById("toggle-key");
+const deviceAuthBtn = document.getElementById("device-auth-btn");
+const deviceAuthResult = document.getElementById("device-auth-result");
 const dashboardLink = document.getElementById("dashboard-link");
 const docsLink = document.getElementById("docs-link");
 const statInput = document.getElementById("stat-input");
 const statOutput = document.getElementById("stat-output");
 const statTotal = document.getElementById("stat-total");
 const statsFooter = document.getElementById("stats-footer");
-const testResult = document.getElementById("test-result");
+let baseUrl = "";
+const baseUrlReady = invoke("get_base_url").then(url => {
+  baseUrl = url;
+  return url;
+});
 
 async function loadConfig() {
   const config = await invoke("get_config");
-  apiKeyInput.value = config.api_key || "";
+  if (config.access_token) {
+    deviceAuthResult.textContent = "Signed in";
+    deviceAuthResult.className = "test-result success";
+  } else {
+    deviceAuthResult.textContent = "";
+    deviceAuthResult.className = "test-result";
+  }
 }
 
 async function loadStatus() {
@@ -58,53 +66,55 @@ function formatTimeAgo(ts) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-// Save config
-saveBtn.addEventListener("click", async () => {
-  saveBtn.textContent = "Saving...";
-  await invoke("save_config", { apiKey: apiKeyInput.value.trim() });
-  saveBtn.textContent = "Saved!";
-  setTimeout(() => { saveBtn.textContent = "Save"; }, 1500);
-});
-
-// Test API key connection
-testBtn.addEventListener("click", async () => {
-  const key = apiKeyInput.value.trim();
-  if (!key) {
-    testResult.textContent = "Please enter an API key first";
-    testResult.className = "test-result error";
-    return;
-  }
-  testBtn.textContent = "Testing...";
-  testBtn.disabled = true;
-  testResult.textContent = "";
+deviceAuthBtn.addEventListener("click", async () => {
+  deviceAuthBtn.disabled = true;
+  deviceAuthBtn.textContent = "Starting...";
+  deviceAuthResult.textContent = "";
   try {
-    const msg = await invoke("test_api_key", { apiKey: key });
-    testResult.textContent = msg;
-    testResult.className = "test-result success";
+    const data = await invoke("start_device_auth");
+    deviceAuthResult.textContent = `Enter code ${data.userCode}`;
+    deviceAuthResult.className = "test-result";
+    const verificationUri = data.verificationUriComplete || data.verificationUri;
+    await open(await absoluteUrl(verificationUri));
+    deviceAuthBtn.textContent = "Waiting...";
+
+    const deadline = Date.now() + data.expiresIn * 1000;
+    const interval = Math.max(data.interval, 1) * 1000;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, interval));
+      if (await invoke("poll_device_auth", { deviceCode: data.deviceCode })) {
+        deviceAuthResult.textContent = "Signed in";
+        deviceAuthResult.className = "test-result success";
+        return;
+      }
+    }
+
+    deviceAuthResult.textContent = "Device code expired";
+    deviceAuthResult.className = "test-result error";
   } catch (e) {
-    testResult.textContent = e;
-    testResult.className = "test-result error";
+    deviceAuthResult.textContent = e;
+    deviceAuthResult.className = "test-result error";
+  } finally {
+    deviceAuthBtn.textContent = "Sign in with Browser";
+    deviceAuthBtn.disabled = false;
   }
-  testBtn.textContent = "Test Connection";
-  testBtn.disabled = false;
 });
 
-// Toggle API key visibility
-toggleKeyBtn.addEventListener("click", () => {
-  apiKeyInput.type = apiKeyInput.type === "password" ? "text" : "password";
-});
+async function absoluteUrl(url) {
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  return `${await baseUrlReady}${url}`;
+}
 
 // External links — URL derived from Rust's single BASE_URL constant
-let baseUrl = "";
-invoke("get_base_url").then(url => { baseUrl = url; });
-
-dashboardLink.addEventListener("click", (e) => {
+dashboardLink.addEventListener("click", async (e) => {
   e.preventDefault();
+  await baseUrlReady;
   open(`${baseUrl}/dashboard`);
 });
 
-docsLink.addEventListener("click", (e) => {
+docsLink.addEventListener("click", async (e) => {
   e.preventDefault();
+  await baseUrlReady;
   open(`${baseUrl}/docs`);
 });
 

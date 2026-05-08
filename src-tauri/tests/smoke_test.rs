@@ -4,9 +4,10 @@
 #[test]
 fn collect_and_report_smoke() {
     let collectors = wakatoken_client_lib::collector::create_collectors();
+    let machine_id = wakatoken_client_lib::heartbeat::get_machine_id().expect("machine id");
     let mut all_sessions = Vec::new();
     for c in &collectors {
-        match c.collect() {
+        match c.collect(&machine_id) {
             Ok(sessions) => all_sessions.extend(sessions),
             Err(e) => panic!("collector error: {e}"),
         }
@@ -24,8 +25,8 @@ fn collect_and_report_smoke() {
     }
 
     let config = wakatoken_client_lib::config::AppConfig::load();
-    if config.api_key.is_empty() {
-        eprintln!("SKIP upload: no API key configured.");
+    if config.access_token.is_empty() {
+        eprintln!("SKIP upload: no authentication configured.");
         return;
     }
 
@@ -41,7 +42,7 @@ fn collect_and_report_smoke() {
         );
         let result = rt.block_on(wakatoken_client_lib::reporter::send_heartbeats(
             &client,
-            &config.api_key,
+            &config,
             session.heartbeats.clone(),
         ));
         match result {

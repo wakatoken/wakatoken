@@ -94,7 +94,7 @@ impl Collector for ClaudeCollector {
         "claude-code"
     }
 
-    fn collect(&self) -> Result<Vec<SessionFile>, String> {
+    fn collect(&self, machine_id: &str) -> Result<Vec<SessionFile>, String> {
         let claude_dir = dirs::home_dir()
             .ok_or("cannot find home directory")?
             .join(".claude")
@@ -110,7 +110,7 @@ impl Collector for ClaudeCollector {
 
         for file in &files {
             let prev_offset = offsets.get(file).copied().unwrap_or(0);
-            match parse_jsonl_incremental(file, prev_offset) {
+            match parse_jsonl_incremental(file, prev_offset, machine_id) {
                 Ok((heartbeats, new_offset)) => {
                     if !heartbeats.is_empty() {
                         sessions.push(SessionFile {
@@ -164,7 +164,11 @@ fn walk(dir: &Path, depth: u32, files: &mut Vec<PathBuf>) {
 
 // ── JSONL parsing ───────────────────────────────────────────────────────
 
-fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, u64), String> {
+fn parse_jsonl_incremental(
+    path: &Path,
+    offset: u64,
+    machine_id: &str,
+) -> Result<(Vec<Heartbeat>, u64), String> {
     let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
     let file_len = file.metadata().map_err(|e| e.to_string())?.len();
     let seek_to = if offset > file_len { 0 } else { offset };
@@ -172,9 +176,6 @@ fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, 
     file.seek(SeekFrom::Start(seek_to))
         .map_err(|e| e.to_string())?;
 
-    let hostname = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_default();
     let platform = std::env::consts::OS;
 
     let mut reader = BufReader::new(file);
@@ -190,7 +191,7 @@ fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, 
         }
         bytes_read += n as u64;
 
-        if let Some((key, hb)) = parse_line(&line, &hostname, platform) {
+        if let Some((key, hb)) = parse_line(&line, &machine_id, platform) {
             dedup.insert(key, hb);
         }
     }
@@ -198,7 +199,7 @@ fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, 
     Ok((dedup.into_values().collect(), bytes_read))
 }
 
-fn parse_line(line: &str, hostname: &str, platform: &str) -> Option<(String, Heartbeat)> {
+fn parse_line(line: &str, machine_id: &str, platform: &str) -> Option<(String, Heartbeat)> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;
@@ -260,7 +261,7 @@ fn parse_line(line: &str, hostname: &str, platform: &str) -> Option<(String, Hea
             model: model.to_string(),
             source: "claude-code".to_string(),
             os: platform.to_string(),
-            machine: hostname.to_string(),
+            machine_id: machine_id.to_string(),
             git_branch: git_branch.to_string(),
             language,
             tool,
@@ -353,6 +354,8 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    const TEST_MACHINE_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
+
     #[test]
     fn extract_project_returns_last_component() {
         assert_eq!(extract_project("/home/user/proj"), "proj");
@@ -430,10 +433,10 @@ mod tests {
         let l2 = assistant_json("m2", "r2", 20, 10);
         let f = write_temp_jsonl(&[&l1, &l2]);
 
-        let (hbs, off1) = parse_jsonl_incremental(f.path(), 0).unwrap();
+        let (hbs, off1) = parse_jsonl_incremental(f.path(), 0, TEST_MACHINE_ID).unwrap();
         assert_eq!(hbs.len(), 2);
 
-        let (hbs2, _) = parse_jsonl_incremental(f.path(), off1).unwrap();
+        let (hbs2, _) = parse_jsonl_incremental(f.path(), off1, TEST_MACHINE_ID).unwrap();
         assert_eq!(hbs2.len(), 0);
     }
 
@@ -441,7 +444,7 @@ mod tests {
     fn incremental_deduplicates() {
         let l = assistant_json("m1", "r1", 10, 5);
         let f = write_temp_jsonl(&[&l, &l]);
-        let (hbs, _) = parse_jsonl_incremental(f.path(), 0).unwrap();
+        let (hbs, _) = parse_jsonl_incremental(f.path(), 0, TEST_MACHINE_ID).unwrap();
         assert_eq!(hbs.len(), 1);
     }
 
@@ -460,7 +463,7 @@ mod tests {
         let files = find_jsonl_files(&claude_dir);
         let mut total = 0usize;
         for file in &files {
-            let (hbs, off) = parse_jsonl_incremental(file, 0).unwrap();
+            let (hbs, off) = parse_jsonl_incremental(file, 0, TEST_MACHINE_ID).unwrap();
             assert!(off > 0 || fs::metadata(file).unwrap().len() == 0);
             for hb in &hbs {
                 assert!(hb.event_id != ":");

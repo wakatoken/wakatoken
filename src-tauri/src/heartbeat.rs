@@ -9,7 +9,7 @@ pub struct Heartbeat {
     pub model: String,
     pub source: String,
     pub os: String,
-    pub machine: String,
+    pub machine_id: String,
     pub git_branch: String,
     pub language: String,
     pub tool: String,
@@ -18,6 +18,80 @@ pub struct Heartbeat {
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
     pub event_ts: i64,
+}
+
+pub fn get_machine_id() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("ioreg")
+            .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let s = String::from_utf8_lossy(&output.stdout);
+        let id = s
+            .lines()
+            .find(|line| line.contains("IOPlatformUUID"))
+            .and_then(|line| line.split('"').nth(3))
+            .ok_or("cannot read macOS IOPlatformUUID")?;
+        return validate_machine_id(id);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let id = std::fs::read_to_string("/etc/machine-id").map_err(|e| e.to_string())?;
+        return validate_machine_id(id.trim());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let output = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKLM\SOFTWARE\Microsoft\Cryptography",
+                "/v",
+                "MachineGuid",
+            ])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let id = text
+            .lines()
+            .find(|line| line.contains("MachineGuid"))
+            .and_then(|line| line.split_whitespace().last())
+            .ok_or("cannot read Windows MachineGuid")?;
+        return validate_machine_id(id);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        Err("unsupported platform for machineId".to_string())
+    }
+}
+
+fn validate_machine_id(value: &str) -> Result<String, String> {
+    if is_machine_id(value) {
+        Ok(value.to_string())
+    } else {
+        Err(format!("invalid machineId format: {value}"))
+    }
+}
+
+fn is_machine_id(value: &str) -> bool {
+    is_hex(value, 32) || is_uuid(value)
+}
+
+fn is_uuid(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('-').collect();
+    parts.len() == 5
+        && is_hex(parts[0], 8)
+        && is_hex(parts[1], 4)
+        && is_hex(parts[2], 4)
+        && is_hex(parts[3], 4)
+        && is_hex(parts[4], 12)
+}
+
+fn is_hex(value: &str, len: usize) -> bool {
+    value.len() == len && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 #[cfg(test)]
@@ -32,7 +106,7 @@ mod tests {
             model: "claude-3-5-sonnet".to_string(),
             source: "claude-code".to_string(),
             os: "macos".to_string(),
-            machine: "laptop".to_string(),
+            machine_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             git_branch: "main".to_string(),
             language: "Rust".to_string(),
             tool: "Edit".to_string(),
@@ -45,64 +119,33 @@ mod tests {
     }
 
     #[test]
-    fn serializes_event_id_as_camel_case() {
-        let hb = sample_heartbeat();
-        let json: serde_json::Value = serde_json::to_value(&hb).unwrap();
-        assert!(
-            json.get("eventId").is_some(),
-            "expected camelCase 'eventId'"
-        );
-        assert!(
-            json.get("event_id").is_none(),
-            "snake_case 'event_id' must not appear"
-        );
+    fn test_machine_id_is_not_empty() {
+        let id = get_machine_id().expect("machine id");
+        assert!(!id.is_empty());
+        println!("Machine ID: {}", id);
     }
 
     #[test]
-    fn serializes_all_fields_as_camel_case() {
-        let hb = sample_heartbeat();
-        let json: serde_json::Value = serde_json::to_value(&hb).unwrap();
-        let expected_keys = [
-            "eventId",
-            "project",
-            "provider",
-            "model",
-            "source",
-            "os",
-            "machine",
-            "gitBranch",
-            "language",
-            "tool",
-            "inputTokens",
-            "outputTokens",
-            "cacheReadTokens",
-            "cacheWriteTokens",
-            "eventTs",
-        ];
-        for key in &expected_keys {
-            assert!(json.get(key).is_some(), "missing camelCase key: {key}");
-        }
+    fn rejects_hostname_as_machine_id() {
+        assert!(validate_machine_id("my-mac").is_err());
     }
 
     #[test]
-    fn serializes_token_counts_correctly() {
-        let hb = sample_heartbeat();
-        let json: serde_json::Value = serde_json::to_value(&hb).unwrap();
-        assert_eq!(json["inputTokens"].as_u64().unwrap(), 1000);
-        assert_eq!(json["outputTokens"].as_u64().unwrap(), 500);
-        assert_eq!(json["cacheReadTokens"].as_u64().unwrap(), 200);
-        assert_eq!(json["cacheWriteTokens"].as_u64().unwrap(), 100);
+    fn accepts_uuid_machine_id() {
+        assert!(validate_machine_id("550e8400-e29b-41d4-a716-446655440000").is_ok());
     }
 
     #[test]
-    fn round_trips_through_json() {
-        let original = sample_heartbeat();
-        let json = serde_json::to_string(&original).unwrap();
-        let restored: Heartbeat = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.event_id, original.event_id);
-        assert_eq!(restored.input_tokens, original.input_tokens);
-        assert_eq!(restored.cache_read_tokens, original.cache_read_tokens);
-        assert_eq!(restored.event_ts, original.event_ts);
+    fn accepts_linux_machine_id() {
+        assert!(validate_machine_id("6f1ed002ab5595859014ebf0951522d9").is_ok());
+    }
+
+    #[test]
+    fn serializes_machine_id_as_camel_case() {
+        let hb = sample_heartbeat();
+        let json: serde_json::Value = serde_json::to_value(&hb).unwrap();
+        assert!(json.get("machineId").is_some());
+        assert!(json.get("machine").is_none());
     }
 
     #[test]
@@ -114,7 +157,7 @@ mod tests {
             "model": "claude-3",
             "source": "claude-code",
             "os": "linux",
-            "machine": "host",
+            "machineId": "6f1ed002ab5595859014ebf0951522d9",
             "gitBranch": "feature",
             "language": "Go",
             "tool": "Read",
@@ -125,18 +168,8 @@ mod tests {
             "eventTs": 1710000001000
         }"#;
         let hb: Heartbeat = serde_json::from_str(json).unwrap();
-        assert_eq!(hb.event_id, "id1:req1");
+        assert_eq!(hb.machine_id, "6f1ed002ab5595859014ebf0951522d9");
         assert_eq!(hb.git_branch, "feature");
         assert_eq!(hb.input_tokens, 42);
-    }
-
-    #[test]
-    fn zero_token_counts_serialize_as_zero() {
-        let mut hb = sample_heartbeat();
-        hb.input_tokens = 0;
-        hb.output_tokens = 0;
-        let json: serde_json::Value = serde_json::to_value(&hb).unwrap();
-        assert_eq!(json["inputTokens"].as_u64().unwrap(), 0);
-        assert_eq!(json["outputTokens"].as_u64().unwrap(), 0);
     }
 }

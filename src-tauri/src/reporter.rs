@@ -1,3 +1,4 @@
+use crate::config::AppConfig;
 use crate::heartbeat::Heartbeat;
 use crate::BASE_URL;
 
@@ -10,7 +11,7 @@ pub struct ReportResult {
 
 pub async fn send_heartbeats(
     client: &reqwest::Client,
-    api_key: &str,
+    config: &AppConfig,
     heartbeats: Vec<Heartbeat>,
 ) -> Result<ReportResult, String> {
     let url = format!("{BASE_URL}/api/v1/heartbeat/batch");
@@ -21,7 +22,7 @@ pub async fn send_heartbeats(
         let resp = client
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("x-api-key", api_key)
+            .header("Authorization", format!("Bearer {}", config.access_token))
             .json(&chunk)
             .send()
             .await
@@ -63,7 +64,7 @@ mod tests {
             model: "claude-3".to_string(),
             source: "claude-code".to_string(),
             os: "linux".to_string(),
-            machine: "host".to_string(),
+            machine_id: "6f1ed002ab5595859014ebf0951522d9".to_string(),
             git_branch: "main".to_string(),
             language: "Rust".to_string(),
             tool: "Edit".to_string(),
@@ -79,13 +80,21 @@ mod tests {
     fn empty_list_returns_zero() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let client = reqwest::Client::new();
-        let r = rt.block_on(send_heartbeats(&client, "x", vec![])).unwrap();
+        let config = AppConfig {
+            access_token: "access-token".to_string(),
+        };
+        let r = rt
+            .block_on(send_heartbeats(&client, &config, vec![]))
+            .unwrap();
         assert_eq!(r.new_count, 0);
+        assert_eq!(r.dedup_count, 0);
     }
 
     #[test]
-    fn heartbeats_serialize_as_camel_case() {
+    fn heartbeats_serialize_machine_id_as_camel_case() {
         let json = serde_json::to_value(&[sample_heartbeat("e1")]).unwrap();
         assert!(json[0].get("eventId").is_some());
+        assert!(json[0].get("machineId").is_some());
+        assert!(json[0].get("machine").is_none());
     }
 }

@@ -16,7 +16,7 @@ pub struct SessionFile {
 pub trait Collector: Send + Sync {
     fn name(&self) -> &str;
     /// Scan and return session files with their heartbeats.
-    fn collect(&self) -> Result<Vec<SessionFile>, String>;
+    fn collect(&self, machine_id: &str) -> Result<Vec<SessionFile>, String>;
     /// Commit offset for a single file after its heartbeats are uploaded.
     fn commit_file(&self, path: &Path, offset: u64);
 }

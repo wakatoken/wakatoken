@@ -61,7 +61,7 @@ impl Collector for CopilotCollector {
         "copilot-agent"
     }
 
-    fn collect(&self) -> Result<Vec<SessionFile>, String> {
+    fn collect(&self, machine_id: &str) -> Result<Vec<SessionFile>, String> {
         let root = dirs::home_dir()
             .ok_or("cannot find home directory")?
             .join(".copilot")
@@ -77,7 +77,7 @@ impl Collector for CopilotCollector {
 
         for file in &files {
             let prev_offset = offsets.get(file).copied().unwrap_or(0);
-            match parse_jsonl_incremental(file, prev_offset) {
+            match parse_jsonl_incremental(file, prev_offset, machine_id) {
                 Ok((heartbeats, new_offset)) => {
                     if !heartbeats.is_empty() {
                         sessions.push(SessionFile {
@@ -127,7 +127,11 @@ fn walk(dir: &Path, depth: u32, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, u64), String> {
+fn parse_jsonl_incremental(
+    path: &Path,
+    offset: u64,
+    machine_id: &str,
+) -> Result<(Vec<Heartbeat>, u64), String> {
     let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
     let file_len = file.metadata().map_err(|e| e.to_string())?.len();
     let seek_to = if offset > file_len { 0 } else { offset };
@@ -135,9 +139,6 @@ fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, 
     file.seek(SeekFrom::Start(seek_to))
         .map_err(|e| e.to_string())?;
 
-    let hostname = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_default();
     let platform = std::env::consts::OS;
 
     let mut reader = BufReader::new(file);
@@ -158,7 +159,7 @@ fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, 
         if let Some(items) = parse_line(
             &line,
             &format!("{}:{line_start}", path.display()),
-            &hostname,
+            &machine_id,
             platform,
             &mut context,
         ) {
@@ -238,7 +239,7 @@ fn parse_session_start_context(line: &str, context: &mut SessionContext) -> bool
 fn parse_line(
     line: &str,
     base_event_id: &str,
-    hostname: &str,
+    machine_id: &str,
     platform: &str,
     context: &mut SessionContext,
 ) -> Option<Vec<Heartbeat>> {
@@ -311,7 +312,7 @@ fn parse_line(
             model,
             source: "copilot-agent".to_string(),
             os: platform.to_string(),
-            machine: hostname.to_string(),
+            machine_id: machine_id.to_string(),
             git_branch: context.git_branch.clone(),
             language: String::new(),
             tool: String::new(),

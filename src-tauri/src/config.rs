@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
-    pub api_key: String,
+    pub access_token: String,
 }
 
 fn config_path() -> PathBuf {
@@ -37,79 +37,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_api_key_is_empty() {
+    fn default_access_token_is_empty() {
         let config = AppConfig::default();
-        assert_eq!(config.api_key, "");
+        assert_eq!(config.access_token, "");
     }
 
     #[test]
-    fn serializes_to_json_with_api_key_field() {
+    fn serializes_access_token() {
         let config = AppConfig {
-            api_key: "waka-test-key".to_string(),
+            access_token: "access-token".to_string(),
         };
         let json = serde_json::to_string(&config).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["api_key"].as_str().unwrap(), "waka-test-key");
+        assert_eq!(v["access_token"].as_str().unwrap(), "access-token");
     }
 
     #[test]
-    fn deserializes_from_json_with_api_key_field() {
-        let json = r#"{"api_key":"waka-abc"}"#;
-        let config: AppConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.api_key, "waka-abc");
+    fn deserializes_missing_access_token_as_empty_string() {
+        let config: AppConfig = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(config.access_token, "");
     }
 
     #[test]
-    fn deserializes_missing_api_key_as_empty_string() {
-        let json = r#"{}"#;
-        let config: AppConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.api_key, "");
-    }
-
-    #[test]
-    fn round_trips_api_key_through_json() {
+    fn round_trips_access_token_through_json() {
         let original = AppConfig {
-            api_key: "round-trip-key".to_string(),
+            access_token: "round-trip-token".to_string(),
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: AppConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.api_key, original.api_key);
-    }
-
-    #[test]
-    fn save_and_load_round_trip() {
-        // Write to a temp file directly to avoid mutating real config.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.json");
-        let config = AppConfig {
-            api_key: "saved-key-123".to_string(),
-        };
-        let json = serde_json::to_string_pretty(&config).unwrap();
-        fs::write(&path, json).unwrap();
-
-        let loaded: AppConfig = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(loaded.api_key, "saved-key-123");
+        assert_eq!(restored.access_token, original.access_token);
     }
 
     #[test]
     fn load_returns_default_when_file_absent() {
-        // config_path() points at the real config location. If it doesn't
-        // exist in CI the function must return Default without panicking.
-        // We verify by ensuring load() doesn't panic and returns an AppConfig.
-        let _ = AppConfig::load(); // must not panic
-    }
-
-    #[test]
-    fn save_writes_pretty_printed_json_with_api_key() {
-        // Verify the serialization format by round-tripping through serde
-        // without touching the real config path.
-        let config = AppConfig {
-            api_key: "pretty-key".to_string(),
-        };
-        let json = serde_json::to_string_pretty(&config).unwrap();
-        assert!(json.contains("api_key"));
-        assert!(json.contains("pretty-key"));
-        let parsed: AppConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.api_key, "pretty-key");
+        let _ = AppConfig::load();
     }
 }

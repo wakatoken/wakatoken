@@ -57,12 +57,21 @@ pub async fn run_sync(
     status: &SharedStatus,
 ) {
     let config = AppConfig::load();
-    if config.api_key.is_empty() {
+    if config.access_token.is_empty() {
         let mut s = status.lock().await;
         s.last_sync_ok = false;
-        s.last_error = "API key not configured".to_string();
+        s.last_error = "Authentication not configured".to_string();
         return;
     }
+    let machine_id = match crate::heartbeat::get_machine_id() {
+        Ok(id) => id,
+        Err(e) => {
+            let mut s = status.lock().await;
+            s.last_sync_ok = false;
+            s.last_error = e;
+            return;
+        }
+    };
 
     // 1. Scan all session files
     emit_progress(app, "Scanning...");
@@ -70,7 +79,7 @@ pub async fn run_sync(
 
     let mut all_sessions = Vec::new();
     for c in collectors {
-        match c.collect() {
+        match c.collect(&machine_id) {
             Ok(sessions) => all_sessions.extend(sessions),
             Err(e) => eprintln!("[wakatoken] collector {} error: {e}", c.name()),
         }
@@ -118,8 +127,7 @@ pub async fn run_sync(
         emit_progress(app, &progress);
         eprintln!("[wakatoken] {progress}");
 
-        match reporter::send_heartbeats(&client, &config.api_key, session.heartbeats.clone()).await
-        {
+        match reporter::send_heartbeats(&client, &config, session.heartbeats.clone()).await {
             Ok(result) => {
                 // Find which collector owns this file and commit its offset
                 for c in collectors {

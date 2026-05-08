@@ -32,22 +32,10 @@
     </section>
 
     <section class="settings">
-      <div class="field">
-        <label for="api-key">API Key</label>
-        <div class="input-group">
-          <input type="password" id="api-key" placeholder="wk_xxx" spellcheck="false" autocomplete="off">
-          <button id="toggle-key" class="icon-btn" title="Show/hide">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3C4.5 3 1.7 5.1 0.5 8c1.2 2.9 4 5 7.5 5s6.3-2.1 7.5-5c-1.2-2.9-4-5-7.5-5zm0 8.5c-1.9 0-3.5-1.6-3.5-3.5S6.1 4.5 8 4.5s3.5 1.6 3.5 3.5S9.9 11.5 8 11.5zm0-5.5C6.9 6 6 6.9 6 8s.9 2 2 2 2-.9 2-2-.9-2-2-2z" fill="currentColor"/></svg>
-          </button>
-        </div>
+      <div class="device-auth">
+        <button id="device-auth-btn">Sign in with Browser</button>
+        <div id="device-auth-result" class="test-result"></div>
       </div>
-
-      <div class="actions">
-        <button id="save-btn">Save</button>
-        <button id="test-btn" class="secondary">Test Connection</button>
-      </div>
-
-      <div id="test-result" class="test-result"></div>
     </section>
 
     <footer class="footer">

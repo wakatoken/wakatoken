@@ -63,7 +63,7 @@ impl Collector for CodexCollector {
         "codex-cli"
     }
 
-    fn collect(&self) -> Result<Vec<SessionFile>, String> {
+    fn collect(&self, machine_id: &str) -> Result<Vec<SessionFile>, String> {
         let codex_home = std::env::var("CODEX_HOME")
             .ok()
             .filter(|s| !s.is_empty())
@@ -82,7 +82,7 @@ impl Collector for CodexCollector {
 
         for file in &files {
             let prev_offset = offsets.get(file).copied().unwrap_or(0);
-            match parse_jsonl_incremental(file, prev_offset) {
+            match parse_jsonl_incremental(file, prev_offset, machine_id) {
                 Ok((heartbeats, new_offset)) => {
                     if !heartbeats.is_empty() {
                         sessions.push(SessionFile {
@@ -139,7 +139,11 @@ fn walk(dir: &Path, depth: u32, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, u64), String> {
+fn parse_jsonl_incremental(
+    path: &Path,
+    offset: u64,
+    machine_id: &str,
+) -> Result<(Vec<Heartbeat>, u64), String> {
     let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
     let file_len = file.metadata().map_err(|e| e.to_string())?.len();
     let seek_to = if offset > file_len { 0 } else { offset };
@@ -147,9 +151,6 @@ fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, 
     file.seek(SeekFrom::Start(seek_to))
         .map_err(|e| e.to_string())?;
 
-    let hostname = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_default();
     let platform = std::env::consts::OS;
 
     let mut reader = BufReader::new(file);
@@ -160,16 +161,15 @@ fn parse_jsonl_incremental(path: &Path, offset: u64) -> Result<(Vec<Heartbeat>, 
     let mut line = String::new();
     loop {
         line.clear();
-        let line_start = bytes_read;
         let n = reader.read_line(&mut line).map_err(|e| e.to_string())?;
         if n == 0 {
             break;
         }
         bytes_read += n as u64;
 
-        let event_id = format!("{}:{line_start}", path.display());
-        if let Some(hb) = parse_line(&line, &event_id, &hostname, platform, &mut context) {
-            dedup.insert(event_id, hb);
+        if let Some(hb) = parse_line(&line, path, &machine_id, platform, &mut context) {
+            let eid = hb.event_id.clone();
+            dedup.insert(eid, hb);
         }
     }
 
@@ -243,8 +243,8 @@ fn read_initial_context(path: &Path) -> SessionContext {
 
 fn parse_line(
     line: &str,
-    event_id: &str,
-    hostname: &str,
+    path: &Path,
+    machine_id: &str,
     platform: &str,
     context: &mut SessionContext,
 ) -> Option<Heartbeat> {
@@ -321,6 +321,17 @@ fn parse_line(
         return None;
     }
 
+    let total_usage = info.get("total_token_usage");
+    let total_in = total_usage
+        .and_then(|v| v.get("input_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let total_out = total_usage
+        .and_then(|v| v.get("output_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let event_id = format!("{}:{total_in}:{total_out}", path.display());
+
     let timestamp = record.get("timestamp")?.as_str()?;
     let event_ts = chrono::DateTime::parse_from_rfc3339(timestamp)
         .map(|dt| dt.timestamp_millis())
@@ -337,7 +348,7 @@ fn parse_line(
         context.model.clone()
     };
     let model = if model.is_empty() {
-        "unknown".to_string()
+        "gpt-unknown".to_string()
     } else {
         model
     };
@@ -349,13 +360,13 @@ fn parse_line(
     };
 
     Some(Heartbeat {
-        event_id: event_id.to_string(),
+        event_id,
         project: extract_project(&context.cwd),
         provider,
         model,
         source: "codex-cli".to_string(),
         os: platform.to_string(),
-        machine: hostname.to_string(),
+        machine_id: machine_id.to_string(),
         git_branch: context.git_branch.clone(),
         language: String::new(),
         tool: String::new(),
@@ -371,7 +382,7 @@ fn extract_project(cwd: &str) -> String {
     Path::new(cwd)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+        .unwrap_or_else(|| "gpt-unknown".to_string())
 }
 
 fn normalize_provider(provider: &str) -> String {
@@ -396,7 +407,7 @@ fn extract_provider(model: &str) -> String {
     {
         "openai".to_string()
     } else {
-        "unknown".to_string()
+        "gpt-unknown".to_string()
     }
 }
 
@@ -455,11 +466,17 @@ mod tests {
     #[test]
     fn parse_line_reads_token_count() {
         let mut ctx = SessionContext::default();
-        parse_line(&session_meta_json(), "e0", "host", "macos", &mut ctx);
+        parse_line(
+            &session_meta_json(),
+            Path::new("test"),
+            "host",
+            "macos",
+            &mut ctx,
+        );
 
         let hb = parse_line(
             &token_count_json(120, 40, 30),
-            "e1",
+            Path::new("test"),
             "host",
             "macos",
             &mut ctx,
@@ -476,24 +493,43 @@ mod tests {
     #[test]
     fn parse_line_uses_model_from_non_token_event_context() {
         let mut ctx = SessionContext::default();
-        parse_line(&session_meta_json(), "e0", "host", "macos", &mut ctx);
+        parse_line(
+            &session_meta_json(),
+            Path::new("test"),
+            "host",
+            "macos",
+            &mut ctx,
+        );
         parse_line(
             &model_event_json("gpt-5.5"),
-            "e1",
+            Path::new("test"),
             "host",
             "macos",
             &mut ctx,
         );
 
-        let hb = parse_line(&token_count_json(10, 5, 2), "e2", "host", "macos", &mut ctx)
-            .expect("expected token heartbeat");
+        let hb = parse_line(
+            &token_count_json(10, 5, 2),
+            Path::new("test"),
+            "host",
+            "macos",
+            &mut ctx,
+        )
+        .expect("expected token heartbeat");
         assert_eq!(hb.model, "gpt-5.5");
     }
 
     #[test]
     fn parse_line_skips_zero_tokens() {
         let mut ctx = SessionContext::default();
-        assert!(parse_line(&token_count_json(0, 0, 0), "e1", "h", "m", &mut ctx).is_none());
+        assert!(parse_line(
+            &token_count_json(0, 0, 0),
+            Path::new("test"),
+            "h",
+            "m",
+            &mut ctx
+        )
+        .is_none());
     }
 
     #[test]
@@ -502,7 +538,7 @@ mod tests {
         assert!(
             parse_line(
                 r#"{"timestamp":"2026-05-08T10:00:01.000Z","type":"event_msg","payload":{"type":"user_message"}}"#,
-                "e1",
+                Path::new("test"),
                 "h",
                 "m",
                 &mut ctx

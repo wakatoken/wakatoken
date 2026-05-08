@@ -7,12 +7,36 @@ mod tray;
 
 use config::AppConfig;
 use scheduler::SyncStatus;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::RunEvent;
 
 pub const BASE_URL: &str = "https://wkt.tftt.cc";
 
 type SharedCollectors = Arc<Vec<Box<dyn collector::Collector>>>;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeviceCodeResponse {
+    #[serde(rename = "deviceCode", alias = "device_code")]
+    pub device_code: String,
+    #[serde(rename = "userCode", alias = "user_code")]
+    pub user_code: String,
+    #[serde(rename = "verificationUri", alias = "verification_uri")]
+    pub verification_uri: String,
+    #[serde(
+        rename = "verificationUriComplete",
+        alias = "verification_uri_complete"
+    )]
+    pub verification_uri_complete: Option<String>,
+    #[serde(rename = "expiresIn", alias = "expires_in")]
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct TokenResponse {
+    access_token: String,
+}
 
 #[tauri::command]
 fn get_base_url() -> &'static str {
@@ -25,30 +49,116 @@ fn get_config() -> AppConfig {
 }
 
 #[tauri::command]
-fn save_config(api_key: String) -> Result<(), String> {
-    let config = AppConfig { api_key };
-    config.save()
+async fn start_device_auth() -> Result<DeviceCodeResponse, String> {
+    let client = reqwest::Client::new();
+    let url = format!("{BASE_URL}/api/auth/device/code");
+
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({ "client_id": "wkt-client" }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        return Err(response_error("Failed to get device code", resp).await);
+    }
+
+    let data: DeviceCodeResponse = resp.json().await.map_err(|e| e.to_string())?;
+
+    let machine_id = crate::heartbeat::get_machine_id()?;
+    let hostname = get_hostname()?;
+
+    let link_resp = client
+        .post(format!("{BASE_URL}/api/v1/device/link"))
+        .json(&serde_json::json!({
+            "deviceCode": data.device_code,
+            "deviceId": machine_id,
+            "hostname": hostname,
+        }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !link_resp.status().is_success() {
+        return Err(response_error("Failed to link device", link_resp).await);
+    }
+
+    Ok(data)
+}
+
+fn get_hostname() -> Result<String, String> {
+    let value = platform_hostname().unwrap_or_default();
+    let hostname = value.trim();
+    if hostname.is_empty() {
+        return Ok("unknown".to_string());
+    }
+    Ok(hostname.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn platform_hostname() -> Result<String, String> {
+    let output = std::process::Command::new("scutil")
+        .args(["--get", "LocalHostName"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err("failed to read LocalHostName".to_string());
+    }
+    String::from_utf8(output.stdout).map_err(|e| e.to_string())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn platform_hostname() -> Result<String, String> {
+    let output = std::process::Command::new("hostname")
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err("failed to read hostname".to_string());
+    }
+    String::from_utf8(output.stdout).map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+fn platform_hostname() -> Result<String, String> {
+    std::env::var("COMPUTERNAME").map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn test_api_key(api_key: String) -> Result<String, String> {
+async fn poll_device_auth(device_code: String) -> Result<bool, String> {
     let client = reqwest::Client::new();
-    let url = format!("{BASE_URL}/api/v1/validate");
+    let url = format!("{BASE_URL}/api/auth/device/token");
+
     let resp = client
-        .get(&url)
-        .header("x-api-key", &api_key)
+        .post(&url)
+        .json(&serde_json::json!({
+            "client_id": "wkt-client",
+            "device_code": device_code,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code"
+        }))
         .send()
         .await
         .map_err(|e| e.to_string())?;
 
     if resp.status().is_success() {
-        Ok("Connected successfully".to_string())
-    } else if resp.status().as_u16() == 401 {
-        Err("Invalid API key".to_string())
+        let data: TokenResponse = resp.json().await.map_err(|e| e.to_string())?;
+        let config = AppConfig {
+            access_token: data.access_token,
+        };
+        config.save()?;
+        Ok(true)
     } else {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        Err(format!("HTTP {status}: {body}"))
+        Ok(false)
+    }
+}
+
+async fn response_error(prefix: &str, resp: reqwest::Response) -> String {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if body.is_empty() {
+        format!("{prefix}: {status}")
+    } else {
+        format!("{prefix}: {status}: {body}")
     }
 }
 
@@ -89,10 +199,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_base_url,
             get_config,
-            save_config,
-            test_api_key,
             get_sync_status,
             sync_now,
+            start_device_auth,
+            poll_device_auth,
         ])
         .setup(move |app| {
             #[cfg(target_os = "macos")]
