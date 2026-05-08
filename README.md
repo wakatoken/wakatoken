@@ -1,10 +1,10 @@
 # WakaToken
 
-A lightweight desktop app that tracks your AI coding assistant token usage. Runs silently in the system tray, collects usage data from Claude Code and Codex CLI, and syncs to the [WakaToken dashboard](https://wkt.tftt.cc).
+A lightweight desktop app that tracks your AI coding assistant token usage. Runs silently in the system tray, collects usage data from Claude Code, Codex CLI, and GitHub Copilot sessions, and syncs to the [WakaToken dashboard](https://wkt.tftt.cc).
 
 ## Features
 
-- **Automatic collection** - Scans Claude Code and Codex CLI session files incrementally, no manual tracking needed
+- **Automatic collection** - Scans Claude Code, Codex CLI, and GitHub Copilot session files incrementally, no manual tracking needed
 - **System tray** - Runs in the background with a menu showing today's token usage and sync status
 - **Periodic sync** - Uploads usage data every 5 minutes with deduplication
 - **Auto-update** - Checks for new versions from GitHub Releases
@@ -39,7 +39,7 @@ Download from the [Releases page](https://github.com/wakatoken/wakatoken/release
 3. Enter your API key (get one from [wkt.tftt.cc](https://wkt.tftt.cc))
 4. Click **Test Connection** to verify, then **Save**
 
-The app will start syncing your Claude Code and Codex CLI token usage automatically.
+The app will start syncing your Claude Code, Codex CLI, and GitHub Copilot token usage automatically.
 
 ## Development
 
@@ -79,6 +79,7 @@ src-tauri/src/
   collector/          # Pluggable data collectors
     claude.rs         # Claude Code session parser
     codex.rs          # Codex CLI session parser
+    copilot.rs        # GitHub Copilot session parser
   scheduler.rs        # Periodic sync orchestration
   reporter.rs         # API batch uploader
   tray.rs             # System tray menu
@@ -86,7 +87,7 @@ src-tauri/src/
 
 ## How It Works
 
-1. Scans `~/.claude/projects/` and `~/.codex/sessions/` for JSONL session files
+1. Scans `~/.claude/projects/`, `~/.codex/sessions/`, and `~/.copilot/session-state/*/events.jsonl`
 2. Parses new entries incrementally (tracks byte offsets per file)
 3. Extracts token counts, model, project, language, and tool context
 4. Deduplicates by message ID

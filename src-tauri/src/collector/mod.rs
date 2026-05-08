@@ -1,4 +1,5 @@
 pub mod claude;
+pub mod copilot;
 pub mod codex;
 
 use crate::heartbeat::Heartbeat;
@@ -23,6 +24,7 @@ pub fn create_collectors() -> Vec<Box<dyn Collector>> {
     vec![
         Box::new(claude::ClaudeCollector::new()),
         Box::new(codex::CodexCollector::new()),
+        Box::new(copilot::CopilotCollector::new()),
     ]
 }
 
@@ -46,5 +48,11 @@ mod tests {
     fn create_collectors_contains_codex_cli() {
         let collectors = create_collectors();
         assert!(collectors.iter().any(|c| c.name() == "codex-cli"));
+    }
+
+    #[test]
+    fn create_collectors_contains_copilot_agent() {
+        let collectors = create_collectors();
+        assert!(collectors.iter().any(|c| c.name() == "copilot-agent"));
     }
 }
