@@ -101,6 +101,14 @@ impl Collector for CodexCollector {
     }
 
     fn scan_all(&self, machine_id: &str) -> Result<Vec<SessionFile>, String> {
+        self.scan_all_with_progress(machine_id, &mut |_, _| {})
+    }
+
+    fn scan_all_with_progress(
+        &self,
+        machine_id: &str,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Vec<SessionFile>, String> {
         let codex_home = std::env::var("CODEX_HOME")
             .ok()
             .filter(|s| !s.is_empty())
@@ -113,8 +121,10 @@ impl Collector for CodexCollector {
             return Ok(vec![]);
         }
 
+        let files = find_jsonl_files(&codex_dir);
+        let total = files.len();
         let mut sessions = Vec::new();
-        for file in find_jsonl_files(&codex_dir) {
+        for (index, file) in files.into_iter().enumerate() {
             if let Ok((heartbeats, offset)) = parse_jsonl_incremental(&file, 0, machine_id) {
                 if !heartbeats.is_empty() {
                     sessions.push(SessionFile {
@@ -125,6 +135,7 @@ impl Collector for CodexCollector {
                     });
                 }
             }
+            progress(index + 1, total);
         }
         Ok(sessions)
     }

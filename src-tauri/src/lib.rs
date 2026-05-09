@@ -9,12 +9,13 @@ mod tray;
 use config::AppConfig;
 use scheduler::SyncStatus;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tauri::RunEvent;
+use std::sync::{Arc, Mutex};
+use tauri::{Emitter, RunEvent};
 
 pub const BASE_URL: &str = "https://wkt.tftt.cc";
 
 type SharedCollectors = Arc<Vec<Box<dyn collector::Collector>>>;
+static LOCAL_STATS_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeviceCodeResponse {
@@ -48,6 +49,19 @@ struct AccountInfo {
     image: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanProgress {
+    phase: String,
+    runtime: String,
+    detail: String,
+    completed: usize,
+    total: usize,
+    sessions: usize,
+    file_completed: usize,
+    file_total: usize,
+}
+
 #[derive(Debug, Deserialize)]
 struct SessionResponse {
     user: Option<SessionUser>,
@@ -74,6 +88,15 @@ fn get_config() -> AppConfig {
 fn save_runtime_settings(enabled_runtimes: Vec<String>) -> Result<AppConfig, String> {
     let mut config = AppConfig::load();
     config.enabled_runtimes = enabled_runtimes;
+    config.save()?;
+    Ok(config)
+}
+
+#[tauri::command]
+fn complete_onboarding(enabled_runtimes: Vec<String>) -> Result<AppConfig, String> {
+    let mut config = AppConfig::load();
+    config.enabled_runtimes = enabled_runtimes;
+    config.onboarding_completed = true;
     config.save()?;
     Ok(config)
 }
@@ -132,24 +155,236 @@ fn get_local_dashboard() -> Result<local_stats::LocalDashboard, String> {
 }
 
 #[tauri::command]
+fn has_local_stats() -> Result<bool, String> {
+    local_stats::has_store()
+}
+
+#[tauri::command]
 fn list_sessions(runtime: Option<String>) -> Result<Vec<local_stats::SessionSummary>, String> {
     local_stats::list_sessions(runtime, Some(100))
 }
 
 #[tauri::command]
-fn rescan_local_stats(
+async fn rescan_local_stats(
+    app: tauri::AppHandle,
     collectors: tauri::State<'_, SharedCollectors>,
 ) -> Result<local_stats::LocalDashboard, String> {
-    let machine_id = crate::heartbeat::get_machine_id()?;
     let config = AppConfig::load();
-    let mut sessions = Vec::new();
-    for collector in collectors.iter() {
-        if !config.runtime_enabled(collector.name()) {
-            continue;
-        }
-        sessions.extend(collector.scan_all(&machine_id)?);
+    rescan_runtimes_with_progress(
+        Some(app),
+        collectors.inner().clone(),
+        config.enabled_runtimes,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn rescan_runtimes(
+    app: tauri::AppHandle,
+    collectors: tauri::State<'_, SharedCollectors>,
+    runtimes: Vec<String>,
+) -> Result<local_stats::LocalDashboard, String> {
+    rescan_runtimes_with_progress(Some(app), collectors.inner().clone(), runtimes).await
+}
+
+#[tauri::command]
+async fn rescan_runtime_stats(
+    app: tauri::AppHandle,
+    collectors: tauri::State<'_, SharedCollectors>,
+    runtime: String,
+) -> Result<local_stats::LocalDashboard, String> {
+    rescan_runtimes_with_progress(Some(app), collectors.inner().clone(), vec![runtime]).await
+}
+
+async fn rescan_runtimes_with_progress(
+    app: Option<tauri::AppHandle>,
+    collectors: SharedCollectors,
+    runtimes: Vec<String>,
+) -> Result<local_stats::LocalDashboard, String> {
+    let machine_id = crate::heartbeat::get_machine_id()?;
+    let enabled: Vec<(usize, String)> = collectors
+        .iter()
+        .enumerate()
+        .filter_map(|(index, collector)| {
+            runtimes
+                .iter()
+                .any(|runtime| runtime == collector.name())
+                .then(|| (index, collector.name().to_string()))
+        })
+        .collect();
+
+    let total = enabled.len();
+    emit_scan_progress(
+        &app,
+        "scanning",
+        "",
+        "Scanning local sessions...",
+        0,
+        total,
+        0,
+        0,
+        0,
+    );
+
+    let mut tasks = tokio::task::JoinSet::new();
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+    for (index, runtime) in enabled {
+        emit_scan_progress(
+            &app,
+            "runtime-started",
+            &runtime,
+            &format!("Scanning {runtime}..."),
+            0,
+            total,
+            0,
+            0,
+            0,
+        );
+
+        let collectors = collectors.clone();
+        let machine_id = machine_id.clone();
+        let progress_tx = progress_tx.clone();
+        tasks.spawn_blocking(move || {
+            let mut progress = |file_completed: usize, file_total: usize| {
+                progress_tx
+                    .send((runtime.clone(), file_completed, file_total))
+                    .ok();
+            };
+            let result = collectors[index].scan_all_with_progress(&machine_id, &mut progress);
+            (runtime, result)
+        });
     }
-    local_stats::rebuild_from_sessions(&sessions)
+    drop(progress_tx);
+
+    let mut sessions = Vec::new();
+    let mut errors = Vec::new();
+    let mut completed = 0usize;
+
+    while completed < total {
+        tokio::select! {
+            Some((runtime, file_completed, file_total)) = progress_rx.recv() => {
+                emit_scan_progress(
+                    &app,
+                    "runtime-progress",
+                    &runtime,
+                    &format!("{runtime} scanned {file_completed}/{file_total} files"),
+                    completed,
+                    total,
+                    0,
+                    file_completed,
+                    file_total,
+                );
+            }
+            Some(result) = tasks.join_next() => {
+                let (runtime, scan_result) = result.map_err(|e| e.to_string())?;
+                completed += 1;
+                match scan_result {
+                    Ok(mut runtime_sessions) => {
+                        let session_count = runtime_sessions.len();
+                        sessions.append(&mut runtime_sessions);
+                        emit_scan_progress(
+                            &app,
+                            "runtime-done",
+                            &runtime,
+                            &format!("{runtime} scanned {session_count} sessions"),
+                            completed,
+                            total,
+                            session_count,
+                            1,
+                            1,
+                        );
+                    }
+                    Err(error) => {
+                        emit_scan_progress(
+                            &app,
+                            "runtime-error",
+                            &runtime,
+                            &format!("{runtime} failed: {error}"),
+                            completed,
+                            total,
+                            0,
+                            1,
+                            1,
+                        );
+                        errors.push(format!("{runtime}: {error}"));
+                    }
+                }
+            }
+        }
+    }
+
+    if !errors.is_empty() {
+        let error = errors.join("; ");
+        emit_scan_progress(
+            &app,
+            "error",
+            "",
+            &error,
+            completed,
+            total,
+            sessions.len(),
+            0,
+            0,
+        );
+        return Err(error);
+    }
+
+    let scanned_runtimes = enabled_runtime_names(&collectors, &runtimes);
+    let _guard = LOCAL_STATS_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
+    let dashboard = local_stats::replace_runtime_sessions(&scanned_runtimes, &sessions)?;
+    emit_scan_progress(
+        &app,
+        "done",
+        "",
+        &format!("Scanned {} sessions", dashboard.session_count),
+        completed,
+        total,
+        dashboard.session_count as usize,
+        1,
+        1,
+    );
+    Ok(dashboard)
+}
+
+fn enabled_runtime_names(collectors: &SharedCollectors, runtimes: &[String]) -> Vec<String> {
+    collectors
+        .iter()
+        .filter_map(|collector| {
+            runtimes
+                .iter()
+                .any(|runtime| runtime == collector.name())
+                .then(|| collector.name().to_string())
+        })
+        .collect()
+}
+
+fn emit_scan_progress(
+    app: &Option<tauri::AppHandle>,
+    phase: &str,
+    runtime: &str,
+    detail: &str,
+    completed: usize,
+    total: usize,
+    sessions: usize,
+    file_completed: usize,
+    file_total: usize,
+) {
+    if let Some(app) = app {
+        app.emit(
+            "scan-progress",
+            ScanProgress {
+                phase: phase.to_string(),
+                runtime: runtime.to_string(),
+                detail: detail.to_string(),
+                completed,
+                total,
+                sessions,
+                file_completed,
+                file_total,
+            },
+        )
+        .ok();
+    }
 }
 
 #[tauri::command]
@@ -303,11 +538,15 @@ pub fn run() {
             get_base_url,
             get_config,
             save_runtime_settings,
+            complete_onboarding,
             sign_out,
             get_account,
             get_local_dashboard,
+            has_local_stats,
             list_sessions,
             rescan_local_stats,
+            rescan_runtimes,
+            rescan_runtime_stats,
             get_sync_status,
             sync_now,
             start_device_auth,

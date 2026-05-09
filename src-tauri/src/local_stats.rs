@@ -70,6 +70,10 @@ pub fn get_local_dashboard() -> Result<LocalDashboard, String> {
     Ok(build_dashboard(&store.sessions))
 }
 
+pub fn has_store() -> Result<bool, String> {
+    Ok(stats_path()?.exists())
+}
+
 pub fn list_sessions(
     runtime: Option<String>,
     limit: Option<usize>,
@@ -96,6 +100,30 @@ pub fn rebuild_from_sessions(sessions: &[SessionFile]) -> Result<LocalDashboard,
     let store = LocalStatsStore {
         version: STORE_VERSION,
         sessions: summarize_sessions_preserving_status(sessions, &previous.sessions),
+    };
+    save_store(&store)?;
+    Ok(build_dashboard(&store.sessions))
+}
+
+pub fn replace_runtime_sessions(
+    runtimes: &[String],
+    sessions: &[SessionFile],
+) -> Result<LocalDashboard, String> {
+    let previous = load_store()?;
+    let mut summaries: Vec<SessionSummary> = previous
+        .sessions
+        .iter()
+        .filter(|session| !runtimes.contains(&session.runtime))
+        .cloned()
+        .collect();
+    summaries.extend(summarize_sessions_preserving_status(
+        sessions,
+        &previous.sessions,
+    ));
+
+    let store = LocalStatsStore {
+        version: STORE_VERSION,
+        sessions: summaries,
     };
     save_store(&store)?;
     Ok(build_dashboard(&store.sessions))
@@ -421,5 +449,69 @@ mod tests {
         assert_eq!(summaries[0].status, "synced");
         assert_eq!(summaries[0].input_tokens, 10);
         assert_eq!(summaries[0].output_tokens, 3);
+    }
+
+    #[test]
+    fn replace_runtime_keeps_other_runtime_sessions() {
+        let previous = vec![
+            SessionSummary {
+                id: "/tmp/claude.jsonl".to_string(),
+                path: "/tmp/claude.jsonl".to_string(),
+                runtime: "claude-code".to_string(),
+                project: "old".to_string(),
+                model: "old".to_string(),
+                started_at: 1,
+                ended_at: 2,
+                input_tokens: 1,
+                output_tokens: 1,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                total_tokens: 2,
+                event_count: 1,
+                status: "synced".to_string(),
+                last_error: String::new(),
+            },
+            SessionSummary {
+                id: "/tmp/codex.jsonl".to_string(),
+                path: "/tmp/codex.jsonl".to_string(),
+                runtime: "codex-cli".to_string(),
+                project: "codex".to_string(),
+                model: "model".to_string(),
+                started_at: 1,
+                ended_at: 2,
+                input_tokens: 4,
+                output_tokens: 2,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                total_tokens: 6,
+                event_count: 1,
+                status: "synced".to_string(),
+                last_error: String::new(),
+            },
+        ];
+        let replacement = vec![SessionFile {
+            runtime: "claude-code".to_string(),
+            path: PathBuf::from("/tmp/claude-new.jsonl"),
+            offset: 10,
+            heartbeats: vec![heartbeat("e1", "claude-code", 10, 3)],
+        }];
+
+        let mut summaries: Vec<SessionSummary> = previous
+            .iter()
+            .filter(|session| session.runtime != "claude-code")
+            .cloned()
+            .collect();
+        summaries.extend(summarize_sessions_preserving_status(
+            &replacement,
+            &previous,
+        ));
+
+        assert_eq!(summaries.len(), 2);
+        assert!(summaries
+            .iter()
+            .any(|session| session.id == "/tmp/codex.jsonl"));
+        assert!(summaries
+            .iter()
+            .any(|session| session.id == "/tmp/claude-new.jsonl"));
     }
 }

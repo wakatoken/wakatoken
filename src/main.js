@@ -21,11 +21,13 @@ const todayLocalSessions = document.getElementById("today-local-sessions");
 const runtimeList = document.getElementById("runtime-list");
 const runtimeFilter = document.getElementById("runtime-filter");
 const sessionList = document.getElementById("session-list");
-const rescanButtons = document.querySelectorAll(".rescan-btn");
 const syncNowButtons = document.querySelectorAll(".sync-now-btn");
 const settingsBtn = document.getElementById("settings-btn");
 const settingsModal = document.getElementById("settings-modal");
 const settingsCloseBtn = document.getElementById("settings-close-btn");
+const onboardingModal = document.getElementById("onboarding-modal");
+const onboardingRuntimes = document.getElementById("onboarding-runtimes");
+const onboardingScanBtn = document.getElementById("onboarding-scan-btn");
 const accountArea = document.getElementById("account-area");
 const modalAccount = document.getElementById("modal-account");
 const runtimeSettings = document.querySelector(".runtime-settings");
@@ -42,10 +44,18 @@ const baseUrlReady = invoke("get_base_url").then(url => {
 let selectedRuntime = "all";
 let appConfig = null;
 let account = { signedIn: false, name: "", email: "", image: null };
+let scanState = { active: new Set(), runtimes: new Map(), completed: 0, total: 0 };
+
+const runtimes = [
+  { id: "claude-code", label: "Claude Code" },
+  { id: "codex-cli", label: "Codex CLI" },
+  { id: "copilot-agent", label: "Copilot Agent" },
+  { id: "gemini-cli", label: "Gemini CLI" },
+];
 
 async function loadConfig() {
   appConfig = await invoke("get_config");
-  syncRuntimeSettings(appConfig.enabled_runtimes || []);
+  renderRuntimeControls();
   if (appConfig.access_token) {
     deviceAuthBtn.textContent = "Sign out";
     deviceAuthResult.textContent = "Signed in";
@@ -76,6 +86,7 @@ async function loadLocalDashboard() {
   renderRuntimeFilter(dashboard.runtimes);
   renderRuntimes(dashboard.runtimes, dashboard.totalTokens);
   renderSessions(sessions);
+  return dashboard;
 }
 
 function renderStatus(s) {
@@ -210,19 +221,49 @@ function accountInitial(value) {
   return (value || "W").trim().charAt(0).toUpperCase();
 }
 
-function syncRuntimeSettings(enabled) {
-  const enabledSet = new Set(enabled);
-  for (const input of runtimeSettings.querySelectorAll("input")) {
-    input.checked = enabledSet.has(input.value);
-  }
-}
-
 async function saveRuntimeSettings() {
-  const enabled = [...runtimeSettings.querySelectorAll("input:checked")]
+  const enabled = [...runtimeSettings.querySelectorAll("input.runtime-toggle:checked")]
     .map(input => input.value);
   appConfig = await invoke("save_runtime_settings", { enabledRuntimes: enabled });
-  syncRuntimeSettings(appConfig.enabled_runtimes || []);
+  renderRuntimeControls();
   await loadLocalDashboard();
+}
+
+function renderRuntimeControls() {
+  const enabled = new Set(appConfig?.enabled_runtimes || runtimes.map(runtime => runtime.id));
+  runtimeSettings.innerHTML = runtimes
+    .map(runtime => runtimeControlMarkup(runtime, enabled.has(runtime.id), true))
+    .join("");
+  onboardingRuntimes.innerHTML = runtimes
+    .map(runtime => runtimeControlMarkup(runtime, true, false))
+    .join("");
+  bindRuntimeControlActions();
+  renderRuntimeScanState();
+}
+
+function runtimeControlMarkup(runtime, checked, allowRescan) {
+  return `
+    <div class="runtime-setting-row" data-runtime="${runtime.id}">
+      <label class="runtime-setting-main">
+        <span>
+          <strong>${runtime.label}</strong>
+          <small data-runtime-status="${runtime.id}">Ready</small>
+        </span>
+        <span class="runtime-scan-bar"><span data-runtime-bar="${runtime.id}"></span></span>
+      </label>
+      <label class="switch" aria-label="${runtime.label}">
+        <input class="runtime-toggle" type="checkbox" value="${runtime.id}" ${checked ? "checked" : ""}>
+        <span></span>
+      </label>
+      ${allowRescan ? `<button class="secondary compact runtime-rescan-btn" data-rescan-runtime="${runtime.id}">Rescan</button>` : ""}
+    </div>
+  `;
+}
+
+function bindRuntimeControlActions() {
+  for (const button of runtimeSettings.querySelectorAll("[data-rescan-runtime]")) {
+    button.addEventListener("click", () => rescanRuntime(button.dataset.rescanRuntime));
+  }
 }
 
 function openSettings() {
@@ -296,13 +337,7 @@ function formatTime(ms) {
 }
 
 function runtimeLabel(runtime) {
-  const labels = {
-    "claude-code": "Claude Code",
-    "codex-cli": "Codex CLI",
-    "copilot-agent": "Copilot Agent",
-    "gemini-cli": "Gemini CLI",
-  };
-  return labels[runtime] || runtime;
+  return runtimes.find(item => item.id === runtime)?.label || runtime;
 }
 
 function escapeHtml(value) {
@@ -371,7 +406,7 @@ async function absoluteUrl(url) {
 }
 
 // Listen for sync progress events (from background sync)
-listen("sync-progress", (event) => {
+const syncProgressReady = listen("sync-progress", (event) => {
   const { phase, detail } = event.payload;
   if (phase === "done" || phase === "error") {
     loadStatus();
@@ -381,20 +416,69 @@ listen("sync-progress", (event) => {
   }
 });
 
+const scanProgressReady = listen("scan-progress", async (event) => {
+  const progress = event.payload;
+  renderScanProgress(progress);
+  if (progress.phase === "done") {
+    await loadLocalDashboard();
+  } else if (progress.phase === "error") {
+    clearScanBusy([...scanState.active]);
+  }
+});
+
 runtimeFilter.addEventListener("change", () => {
   selectedRuntime = runtimeFilter.value;
   loadLocalDashboard();
 });
 
-async function rescanLocalData() {
-  setButtonsBusy(rescanButtons, true, "Scanning...");
+async function rescanRuntime(runtime) {
+  if (scanState.active.has(runtime)) return;
+  setScanBusy([runtime]);
   try {
-    await invoke("rescan_local_stats");
+    await invoke("rescan_runtime_stats", { runtime });
     await loadLocalDashboard();
   } catch (e) {
-    statsFooter.textContent = `Rescan failed: ${e}`;
+    statsFooter.textContent = `${runtimeLabel(runtime)} rescan failed: ${e}`;
+    renderScanProgress({
+      phase: "error",
+      runtime,
+      detail: String(e),
+      completed: scanState.completed || 0,
+      total: scanState.total || 0,
+      sessions: 0,
+    });
   } finally {
-    setButtonsBusy(rescanButtons, false, "Rescan");
+    clearScanBusy([runtime]);
+  }
+}
+
+async function collectOnboardingRuntimes() {
+  if (scanState.active.size > 0) return;
+  const enabledRuntimes = [...onboardingRuntimes.querySelectorAll("input.runtime-toggle:checked")]
+    .map(input => input.value);
+  if (!enabledRuntimes.length) return;
+
+  appConfig = await invoke("save_runtime_settings", { enabledRuntimes });
+  renderRuntimeControls();
+  setScanBusy(enabledRuntimes);
+  try {
+    await invoke("rescan_runtimes", { runtimes: enabledRuntimes });
+    appConfig = await invoke("complete_onboarding", { enabledRuntimes });
+    await loadConfig();
+    await loadLocalDashboard();
+    onboardingModal.classList.add("hidden");
+  } catch (e) {
+    statsFooter.textContent = `Initial collection failed: ${e}`;
+    renderScanProgress({
+      phase: "error",
+      runtime: "",
+      detail: String(e),
+      completed: scanState.completed || 0,
+      total: scanState.total || 0,
+      sessions: 0,
+    });
+  } finally {
+    clearScanBusy(enabledRuntimes);
   }
 }
 
@@ -418,13 +502,95 @@ function setButtonsBusy(buttons, busy, text) {
   }
 }
 
-for (const button of rescanButtons) {
-  button.addEventListener("click", rescanLocalData);
+function setScanBusy(activeRuntimes) {
+  resetScanProgress(activeRuntimes);
+  for (const runtime of activeRuntimes) {
+    scanState.active.add(runtime);
+  }
+  updateScanButtons();
+  for (const button of syncNowButtons) {
+    button.disabled = scanState.active.size > 0;
+  }
+}
+
+function clearScanBusy(runtimes) {
+  for (const runtime of runtimes) {
+    scanState.active.delete(runtime);
+  }
+  updateScanButtons();
+  for (const button of syncNowButtons) {
+    button.disabled = scanState.active.size > 0;
+  }
+}
+
+function updateScanButtons() {
+  for (const button of runtimeSettings.querySelectorAll("[data-rescan-runtime]")) {
+    const runtime = button.dataset.rescanRuntime;
+    const active = scanState.active.has(runtime);
+    button.disabled = active;
+    button.textContent = active ? "Scanning..." : "Rescan";
+  }
+  onboardingScanBtn.disabled = scanState.active.size > 0;
+  onboardingScanBtn.textContent = scanState.active.size > 0 ? "Collecting..." : "Collect selected runtimes";
+}
+
+function resetScanProgress(activeRuntimes) {
+  for (const runtime of activeRuntimes) {
+    scanState.runtimes.set(runtime, { text: "Pending", percent: 0 });
+  }
+  scanState.completed = 0;
+  scanState.total = activeRuntimes.length;
+  renderRuntimeScanState();
+}
+
+function renderScanProgress(progress) {
+  scanState.total = progress.total || scanState.total || 0;
+  scanState.completed = Math.max(scanState.completed || 0, progress.completed || 0);
+
+  if (progress.phase === "runtime-started") {
+    scanState.runtimes.set(progress.runtime, { text: "Scanning", percent: 4 });
+  } else if (progress.phase === "runtime-progress") {
+    const percent = progress.fileTotal > 0
+      ? Math.max(4, Math.round((progress.fileCompleted / progress.fileTotal) * 96))
+      : 4;
+    scanState.runtimes.set(progress.runtime, {
+      text: `${formatCount(progress.fileCompleted)}/${formatCount(progress.fileTotal)} files`,
+      percent,
+    });
+  } else if (progress.phase === "runtime-done") {
+    scanState.runtimes.set(progress.runtime, {
+      text: `${formatCount(progress.sessions)} sessions`,
+      percent: 100,
+    });
+  } else if (progress.phase === "runtime-error") {
+    scanState.runtimes.set(progress.runtime, { text: "Failed", percent: 100 });
+  }
+
+  renderRuntimeScanState();
+}
+
+function renderRuntimeScanState() {
+  for (const runtime of runtimes) {
+    const status = scanState.runtimes.get(runtime.id) || { text: "Ready", percent: 0 };
+    for (const node of document.querySelectorAll(`[data-runtime-status="${runtime.id}"]`)) {
+      node.textContent = status.text;
+    }
+    for (const bar of document.querySelectorAll(`[data-runtime-bar="${runtime.id}"]`)) {
+      bar.style.width = `${status.percent}%`;
+    }
+  }
+}
+
+function maybeShowOnboarding(hasLocalStats) {
+  if (hasLocalStats || appConfig?.onboarding_completed) return;
+  onboardingModal.classList.remove("hidden");
 }
 
 for (const button of syncNowButtons) {
   button.addEventListener("click", syncNow);
 }
+
+onboardingScanBtn.addEventListener("click", collectOnboardingRuntimes);
 
 settingsBtn.addEventListener("click", openSettings);
 settingsCloseBtn.addEventListener("click", closeSettings);
@@ -448,11 +614,20 @@ for (const item of menuItems) {
   });
 }
 
-showView("dashboard");
-loadConfig();
-loadAccount();
-loadStatus();
-loadLocalDashboard();
+async function bootstrap() {
+  await Promise.all([syncProgressReady, scanProgressReady]);
+  showView("dashboard");
+  await loadConfig();
+  await loadAccount();
+  await loadStatus();
+  const hasLocalStats = await invoke("has_local_stats");
+  await loadLocalDashboard();
+  maybeShowOnboarding(hasLocalStats);
+}
+
+bootstrap().catch((e) => {
+  statsFooter.textContent = `Startup failed: ${e}`;
+});
 
 // Refresh status every 30s while the window is open
 setInterval(() => {

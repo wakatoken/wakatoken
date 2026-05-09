@@ -129,6 +129,14 @@ impl Collector for ClaudeCollector {
     }
 
     fn scan_all(&self, machine_id: &str) -> Result<Vec<SessionFile>, String> {
+        self.scan_all_with_progress(machine_id, &mut |_, _| {})
+    }
+
+    fn scan_all_with_progress(
+        &self,
+        machine_id: &str,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Vec<SessionFile>, String> {
         let claude_dir = dirs::home_dir()
             .ok_or("cannot find home directory")?
             .join(".claude")
@@ -138,8 +146,10 @@ impl Collector for ClaudeCollector {
             return Ok(vec![]);
         }
 
+        let files = find_jsonl_files(&claude_dir);
+        let total = files.len();
         let mut sessions = Vec::new();
-        for file in find_jsonl_files(&claude_dir) {
+        for (index, file) in files.into_iter().enumerate() {
             if let Ok((heartbeats, offset)) = parse_jsonl_incremental(&file, 0, machine_id) {
                 if !heartbeats.is_empty() {
                     sessions.push(SessionFile {
@@ -150,6 +160,7 @@ impl Collector for ClaudeCollector {
                     });
                 }
             }
+            progress(index + 1, total);
         }
         Ok(sessions)
     }

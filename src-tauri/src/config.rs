@@ -8,6 +8,8 @@ pub struct AppConfig {
     pub access_token: String,
     #[serde(default = "default_enabled_runtimes")]
     pub enabled_runtimes: Vec<String>,
+    #[serde(default)]
+    pub onboarding_completed: bool,
 }
 
 impl Default for AppConfig {
@@ -15,6 +17,7 @@ impl Default for AppConfig {
         Self {
             access_token: String::new(),
             enabled_runtimes: default_enabled_runtimes(),
+            onboarding_completed: false,
         }
     }
 }
@@ -80,6 +83,7 @@ mod tests {
         let config = AppConfig {
             access_token: "access-token".to_string(),
             enabled_runtimes: default_enabled_runtimes(),
+            onboarding_completed: false,
         };
         let json = serde_json::to_string(&config).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -98,6 +102,7 @@ mod tests {
         let original = AppConfig {
             access_token: "round-trip-token".to_string(),
             enabled_runtimes: vec!["codex-cli".to_string()],
+            onboarding_completed: true,
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: AppConfig = serde_json::from_str(&json).unwrap();

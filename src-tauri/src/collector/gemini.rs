@@ -90,6 +90,14 @@ impl Collector for GeminiCollector {
     }
 
     fn scan_all(&self, machine_id: &str) -> Result<Vec<SessionFile>, String> {
+        self.scan_all_with_progress(machine_id, &mut |_, _| {})
+    }
+
+    fn scan_all_with_progress(
+        &self,
+        machine_id: &str,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Vec<SessionFile>, String> {
         let root = dirs::home_dir()
             .ok_or("cannot find home directory")?
             .join(".gemini")
@@ -99,8 +107,10 @@ impl Collector for GeminiCollector {
             return Ok(vec![]);
         }
 
+        let files = find_session_files(&root);
+        let total = files.len();
         let mut sessions = Vec::new();
-        for file in find_session_files(&root) {
+        for (index, file) in files.into_iter().enumerate() {
             if let Ok((heartbeats, offset)) = parse_file_incremental(&file, 0, machine_id) {
                 if !heartbeats.is_empty() {
                     sessions.push(SessionFile {
@@ -111,6 +121,7 @@ impl Collector for GeminiCollector {
                     });
                 }
             }
+            progress(index + 1, total);
         }
         Ok(sessions)
     }

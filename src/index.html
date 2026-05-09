@@ -25,7 +25,6 @@
         <span class="section-label">Cloud Sync</span>
         <strong id="stats-footer">Not synced yet</strong>
         <div class="sync-actions">
-          <button class="secondary compact rescan-btn">Rescan</button>
           <button class="compact sync-now-btn">Sync now</button>
         </div>
       </section>
@@ -153,15 +152,23 @@
 
         <div class="modal-page hidden" data-settings-page="settings">
           <h3>Settings</h3>
-          <div class="runtime-settings">
-            <label><input type="checkbox" value="claude-code"> Claude Code</label>
-            <label><input type="checkbox" value="codex-cli"> Codex CLI</label>
-            <label><input type="checkbox" value="copilot-agent"> Copilot Agent</label>
-            <label><input type="checkbox" value="gemini-cli"> Gemini CLI</label>
-          </div>
+          <div class="runtime-settings"></div>
           <p class="helper-text">Only selected runtimes are scanned and uploaded.</p>
         </div>
       </section>
+    </div>
+  </div>
+
+  <div id="onboarding-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="onboarding-panel">
+      <div class="onboarding-header">
+        <span class="section-label">First Run</span>
+        <h2>Choose Local Runtimes</h2>
+      </div>
+      <div id="onboarding-runtimes" class="runtime-settings"></div>
+      <div class="onboarding-actions">
+        <button id="onboarding-scan-btn">Collect selected runtimes</button>
+      </div>
     </div>
   </div>
 

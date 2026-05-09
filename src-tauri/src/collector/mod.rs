@@ -19,6 +19,15 @@ pub trait Collector: Send + Sync {
     /// Scan and return session files with their heartbeats.
     fn collect(&self, machine_id: &str) -> Result<Vec<SessionFile>, String>;
     fn scan_all(&self, machine_id: &str) -> Result<Vec<SessionFile>, String>;
+    fn scan_all_with_progress(
+        &self,
+        machine_id: &str,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Vec<SessionFile>, String> {
+        let sessions = self.scan_all(machine_id)?;
+        progress(1, 1);
+        Ok(sessions)
+    }
     /// Commit offset for a single file after its heartbeats are uploaded.
     fn commit_file(&self, path: &Path, offset: u64);
 }
