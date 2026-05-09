@@ -315,7 +315,7 @@ pub fn run() {
         ])
         .setup(move |app| {
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
             tray::create_tray(&app.handle().clone(), &status_for_tray)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
