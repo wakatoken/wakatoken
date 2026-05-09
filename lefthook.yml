@@ -1,0 +1,5 @@
+pre-commit:
+  commands:
+    rustfmt:
+      glob: "src-tauri/**/*.rs"
+      run: cd src-tauri && cargo fmt --check

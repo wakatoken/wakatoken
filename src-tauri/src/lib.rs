@@ -1,5 +1,5 @@
-pub mod auto_update;
 mod app_menu;
+pub mod auto_update;
 pub mod collector;
 pub mod config;
 pub mod credentials;

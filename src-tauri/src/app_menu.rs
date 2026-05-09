@@ -1,6 +1,6 @@
 use tauri::image::Image;
 use tauri::menu::{
-    AboutMetadata, HELP_SUBMENU_ID, Menu, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID,
+    AboutMetadata, Menu, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID,
 };
 use tauri::AppHandle;
 
@@ -94,7 +94,11 @@ fn about_metadata(app: &AppHandle) -> tauri::Result<AboutMetadata<'static>> {
         name: Some("WakaToken".to_string()),
         version: Some(pkg_info.version.to_string()),
         copyright: config.bundle.copyright.clone(),
-        authors: config.bundle.publisher.clone().map(|publisher| vec![publisher]),
+        authors: config
+            .bundle
+            .publisher
+            .clone()
+            .map(|publisher| vec![publisher]),
         icon: Some(Image::from_bytes(ABOUT_ICON)?),
         ..Default::default()
     })
