@@ -1,4 +1,6 @@
-use crate::collector::{Collector, SessionFile};
+use crate::collector::{
+    project_name_from_cwd, project_name_from_repository_text, Collector, SessionFile,
+};
 use crate::heartbeat::Heartbeat;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -18,6 +20,7 @@ struct SessionContext {
     git_branch: String,
     model: String,
     provider: String,
+    project: String,
 }
 
 impl Default for CodexCollector {
@@ -288,6 +291,11 @@ fn read_initial_context(path: &Path) -> SessionContext {
         if trimmed.is_empty() {
             continue;
         }
+        if context.project.is_empty() {
+            if let Some(project) = project_name_from_repository_text(trimmed) {
+                context.project = project;
+            }
+        }
         let record: Value = match serde_json::from_str(trimmed) {
             Ok(v) => v,
             Err(_) => continue,
@@ -319,7 +327,6 @@ fn read_initial_context(path: &Path) -> SessionContext {
                 .unwrap_or("")
                 .to_string();
         }
-        break;
     }
 
     context
@@ -339,6 +346,12 @@ fn parse_line(
 
     let record: Value = serde_json::from_str(trimmed).ok()?;
     let record_type = record.get("type")?.as_str()?;
+
+    if context.project.is_empty() {
+        if let Some(project) = project_name_from_repository_text(trimmed) {
+            context.project = project;
+        }
+    }
 
     if let Some(payload_model) = record
         .get("payload")
@@ -446,7 +459,7 @@ fn parse_line(
 
     Some(Heartbeat {
         event_id,
-        project: extract_project(&context.cwd),
+        project: extract_project(context),
         provider,
         model,
         source: "codex-cli".to_string(),
@@ -463,11 +476,16 @@ fn parse_line(
     })
 }
 
-fn extract_project(cwd: &str) -> String {
-    Path::new(cwd)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "gpt-unknown".to_string())
+fn extract_project(context: &SessionContext) -> String {
+    if !context.project.is_empty() {
+        return context.project.clone();
+    }
+    let project = project_name_from_cwd(&context.cwd);
+    if project == "unknown" {
+        "gpt-unknown".to_string()
+    } else {
+        project
+    }
 }
 
 fn normalize_provider(provider: &str) -> String {
@@ -602,6 +620,35 @@ mod tests {
         )
         .expect("expected token heartbeat");
         assert_eq!(hb.model, "gpt-5.5");
+    }
+
+    #[test]
+    fn parse_line_uses_repository_project_context() {
+        let mut ctx = SessionContext::default();
+        parse_line(
+            &session_meta_json().replace("/home/user/myproject", "/tmp/worktrees/92ed6737"),
+            Path::new("test"),
+            "host",
+            "macos",
+            &mut ctx,
+        );
+        parse_line(
+            r#"{"timestamp":"2026-05-08T10:00:00.500Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Repository: https://github.com/saltbo/zpan\nBoard: 1"}]}}"#,
+            Path::new("test"),
+            "host",
+            "macos",
+            &mut ctx,
+        );
+
+        let hb = parse_line(
+            &token_count_json(10, 5, 2),
+            Path::new("test"),
+            "host",
+            "macos",
+            &mut ctx,
+        )
+        .expect("expected token heartbeat");
+        assert_eq!(hb.project, "zpan");
     }
 
     #[test]

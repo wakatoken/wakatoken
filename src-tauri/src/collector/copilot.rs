@@ -1,4 +1,4 @@
-use crate::collector::{Collector, SessionFile};
+use crate::collector::{project_name_from_cwd, Collector, SessionFile};
 use crate::heartbeat::Heartbeat;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -417,10 +417,7 @@ fn parse_line(
 }
 
 fn extract_project(cwd: &str) -> String {
-    Path::new(cwd)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+    project_name_from_cwd(cwd)
 }
 
 fn extract_provider(model: &str) -> String {

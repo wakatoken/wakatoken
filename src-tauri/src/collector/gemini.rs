@@ -1,4 +1,6 @@
-use crate::collector::{Collector, SessionFile};
+use crate::collector::{
+    project_name_from_cwd, project_name_from_repository_text, Collector, SessionFile,
+};
 use crate::heartbeat::Heartbeat;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -223,7 +225,7 @@ fn parse_jsonl_incremental(
         .map_err(|e| e.to_string())?;
 
     let platform = std::env::consts::OS;
-    let project = extract_project(path);
+    let project = read_repository_project(path).unwrap_or_else(|| extract_project(path));
 
     let mut reader = BufReader::new(file);
     let mut dedup: HashMap<String, Heartbeat> = HashMap::new();
@@ -275,7 +277,7 @@ fn parse_json_snapshot(
         .ok_or("invalid gemini session json: missing messages")?;
 
     let platform = std::env::consts::OS;
-    let project = extract_project(path);
+    let project = project_name_from_repository_text(&text).unwrap_or_else(|| extract_project(path));
     let mut dedup: HashMap<String, Heartbeat> = HashMap::new();
 
     for (idx, msg) in messages.iter().enumerate() {
@@ -372,16 +374,30 @@ fn extract_project(path: &Path) -> String {
     if let Ok(root) = fs::read_to_string(project_root_file) {
         let root = root.trim();
         if !root.is_empty() {
-            return Path::new(root)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+            return project_name_from_cwd(root);
         }
     }
     workspace
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn read_repository_project(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+
+    for _ in 0..100 {
+        line.clear();
+        if reader.read_line(&mut line).ok()? == 0 {
+            break;
+        }
+        if let Some(project) = project_name_from_repository_text(&line) {
+            return Some(project);
+        }
+    }
+    None
 }
 
 #[cfg(test)]

@@ -1,4 +1,6 @@
-use crate::collector::{Collector, SessionFile};
+use crate::collector::{
+    project_name_from_cwd, project_name_from_repository_text, Collector, SessionFile,
+};
 use crate::heartbeat::Heartbeat;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -252,6 +254,7 @@ fn parse_jsonl_incremental(
     let mut reader = BufReader::new(file);
     let mut dedup: HashMap<String, Heartbeat> = HashMap::new();
     let mut bytes_read = seek_to;
+    let project_context = read_repository_project(path);
 
     let mut line = String::new();
     loop {
@@ -261,7 +264,9 @@ fn parse_jsonl_incremental(
             break;
         }
 
-        if let Some((key, hb)) = parse_line(&line, &machine_id, platform) {
+        if let Some((key, hb)) =
+            parse_line(&line, &machine_id, platform, project_context.as_deref())
+        {
             bytes_read += n as u64;
             dedup.insert(key, hb);
             continue;
@@ -277,7 +282,29 @@ fn parse_jsonl_incremental(
     Ok((dedup.into_values().collect(), bytes_read))
 }
 
-fn parse_line(line: &str, machine_id: &str, platform: &str) -> Option<(String, Heartbeat)> {
+fn read_repository_project(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+
+    for _ in 0..100 {
+        line.clear();
+        if reader.read_line(&mut line).ok()? == 0 {
+            break;
+        }
+        if let Some(project) = project_name_from_repository_text(&line) {
+            return Some(project);
+        }
+    }
+    None
+}
+
+fn parse_line(
+    line: &str,
+    machine_id: &str,
+    platform: &str,
+    project_context: Option<&str>,
+) -> Option<(String, Heartbeat)> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;
@@ -334,7 +361,9 @@ fn parse_line(line: &str, machine_id: &str, platform: &str) -> Option<(String, H
         dedup_key.clone(),
         Heartbeat {
             event_id: dedup_key,
-            project: extract_project(cwd),
+            project: project_context
+                .map(|project| project.to_string())
+                .unwrap_or_else(|| extract_project(cwd)),
             provider: extract_provider(model),
             model: model.to_string(),
             source: "claude-code".to_string(),
@@ -407,10 +436,7 @@ fn extract_tool_and_language(content: Option<&Vec<Value>>) -> (String, String) {
 }
 
 fn extract_project(cwd: &str) -> String {
-    Path::new(cwd)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+    project_name_from_cwd(cwd)
 }
 
 fn extract_provider(model: &str) -> String {
@@ -479,7 +505,7 @@ mod tests {
     #[test]
     fn parse_line_valid() {
         let line = assistant_json("m1", "r1", 100, 50);
-        let r = parse_line(&line, "host", "macos");
+        let r = parse_line(&line, "host", "macos", None);
         assert!(r.is_some());
         let (key, hb) = r.unwrap();
         assert_eq!(key, "m1:r1");
@@ -489,12 +515,12 @@ mod tests {
     #[test]
     fn parse_line_skips_zero_tokens() {
         let line = assistant_json("m1", "r1", 0, 0);
-        assert!(parse_line(&line, "host", "macos").is_none());
+        assert!(parse_line(&line, "host", "macos", None).is_none());
     }
 
     #[test]
     fn parse_line_skips_non_assistant() {
-        assert!(parse_line(r#"{"type":"user"}"#, "h", "m").is_none());
+        assert!(parse_line(r#"{"type":"user"}"#, "h", "m", None).is_none());
     }
 
     fn write_temp_jsonl(lines: &[&str]) -> tempfile::NamedTempFile {
