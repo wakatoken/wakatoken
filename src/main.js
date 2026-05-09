@@ -1,6 +1,7 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { open } = window.__TAURI__.shell;
+const { getVersion } = window.__TAURI__.app;
 
 const deviceAuthBtn = document.getElementById("device-auth-btn");
 const deviceAuthResult = document.getElementById("device-auth-result");
@@ -10,6 +11,7 @@ const statTotal = document.getElementById("stat-total");
 const statsFooter = document.getElementById("stats-footer");
 const workspaceKicker = document.getElementById("workspace-kicker");
 const workspaceTitle = document.getElementById("workspace-title");
+const appVersion = document.getElementById("app-version");
 const localTotal = document.getElementById("local-total");
 const localInput = document.getElementById("local-input");
 const localOutput = document.getElementById("local-output");
@@ -59,6 +61,10 @@ const runtimes = [
 async function loadConfig() {
   appConfig = await invoke("get_config");
   renderRuntimeControls();
+}
+
+async function loadAppVersion() {
+  appVersion.textContent = `v${await getVersion()}`;
 }
 
 async function loadAccount() {
@@ -640,6 +646,7 @@ for (const item of menuItems) {
 async function bootstrap() {
   await Promise.all([syncProgressReady, scanProgressReady]);
   showView("dashboard");
+  await loadAppVersion();
   await loadConfig();
   await loadAccount();
   await loadStatus();

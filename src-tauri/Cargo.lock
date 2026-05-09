@@ -5130,8 +5130,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "wakatoken-client"
-version = "1.0.0"
+name = "wakatoken"
+version = "1.1.0"
 dependencies = [
  "chrono",
  "dirs",

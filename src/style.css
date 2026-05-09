@@ -34,7 +34,10 @@ body { min-height: 100vh;
   background: #f8fafc; }
 .brand { display: flex;
   align-items: center;
-  justify-content: space-between; }
+  gap: 11px; }
+.brand-mark { width: 42px;
+  height: 42px;
+  flex: 0 0 auto; }
 .brand h1 { font-size: 19px;
   font-weight: 750; }
 .menu { display: flex;

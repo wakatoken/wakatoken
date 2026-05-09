@@ -1,4 +1,5 @@
 pub mod auto_update;
+mod app_menu;
 pub mod collector;
 pub mod config;
 pub mod credentials;
@@ -541,6 +542,7 @@ pub fn run() {
     let collectors_for_scheduler = collectors.clone();
 
     tauri::Builder::default()
+        .menu(app_menu::build)
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
