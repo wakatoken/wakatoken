@@ -64,6 +64,17 @@ struct ScanProgress {
     file_total: usize,
 }
 
+struct ScanProgressPayload<'a> {
+    phase: &'a str,
+    runtime: &'a str,
+    detail: &'a str,
+    completed: usize,
+    total: usize,
+    sessions: usize,
+    file_completed: usize,
+    file_total: usize,
+}
+
 #[derive(Debug, Deserialize)]
 struct SessionResponse {
     user: Option<SessionUser>,
@@ -208,25 +219,23 @@ async fn rescan_runtimes_with_progress(
     let enabled: Vec<(usize, String)> = collectors
         .iter()
         .enumerate()
-        .filter_map(|(index, collector)| {
-            runtimes
-                .iter()
-                .any(|runtime| runtime == collector.name())
-                .then(|| (index, collector.name().to_string()))
-        })
+        .filter(|(_, collector)| runtimes.iter().any(|runtime| runtime == collector.name()))
+        .map(|(index, collector)| (index, collector.name().to_string()))
         .collect();
 
     let total = enabled.len();
     emit_scan_progress(
         &app,
-        "scanning",
-        "",
-        "Scanning local sessions...",
-        0,
-        total,
-        0,
-        0,
-        0,
+        ScanProgressPayload {
+            phase: "scanning",
+            runtime: "",
+            detail: "Scanning local sessions...",
+            completed: 0,
+            total,
+            sessions: 0,
+            file_completed: 0,
+            file_total: 0,
+        },
     );
 
     let mut tasks = tokio::task::JoinSet::new();
@@ -234,14 +243,16 @@ async fn rescan_runtimes_with_progress(
     for (index, runtime) in enabled {
         emit_scan_progress(
             &app,
-            "runtime-started",
-            &runtime,
-            &format!("Scanning {runtime}..."),
-            0,
-            total,
-            0,
-            0,
-            0,
+            ScanProgressPayload {
+                phase: "runtime-started",
+                runtime: &runtime,
+                detail: &format!("Scanning {runtime}..."),
+                completed: 0,
+                total,
+                sessions: 0,
+                file_completed: 0,
+                file_total: 0,
+            },
         );
 
         let collectors = collectors.clone();
@@ -268,14 +279,16 @@ async fn rescan_runtimes_with_progress(
             Some((runtime, file_completed, file_total)) = progress_rx.recv() => {
                 emit_scan_progress(
                     &app,
-                    "runtime-progress",
-                    &runtime,
-                    &format!("{runtime} scanned {file_completed}/{file_total} files"),
-                    completed,
-                    total,
-                    0,
-                    file_completed,
-                    file_total,
+                    ScanProgressPayload {
+                        phase: "runtime-progress",
+                        runtime: &runtime,
+                        detail: &format!("{runtime} scanned {file_completed}/{file_total} files"),
+                        completed,
+                        total,
+                        sessions: 0,
+                        file_completed,
+                        file_total,
+                    },
                 );
             }
             Some(result) = tasks.join_next() => {
@@ -287,27 +300,31 @@ async fn rescan_runtimes_with_progress(
                         sessions.append(&mut runtime_sessions);
                         emit_scan_progress(
                             &app,
-                            "runtime-done",
-                            &runtime,
-                            &format!("{runtime} scanned {session_count} sessions"),
-                            completed,
-                            total,
-                            session_count,
-                            1,
-                            1,
+                            ScanProgressPayload {
+                                phase: "runtime-done",
+                                runtime: &runtime,
+                                detail: &format!("{runtime} scanned {session_count} sessions"),
+                                completed,
+                                total,
+                                sessions: session_count,
+                                file_completed: 1,
+                                file_total: 1,
+                            },
                         );
                     }
                     Err(error) => {
                         emit_scan_progress(
                             &app,
-                            "runtime-error",
-                            &runtime,
-                            &format!("{runtime} failed: {error}"),
-                            completed,
-                            total,
-                            0,
-                            1,
-                            1,
+                            ScanProgressPayload {
+                                phase: "runtime-error",
+                                runtime: &runtime,
+                                detail: &format!("{runtime} failed: {error}"),
+                                completed,
+                                total,
+                                sessions: 0,
+                                file_completed: 1,
+                                file_total: 1,
+                            },
                         );
                         errors.push(format!("{runtime}: {error}"));
                     }
@@ -320,14 +337,16 @@ async fn rescan_runtimes_with_progress(
         let error = errors.join("; ");
         emit_scan_progress(
             &app,
-            "error",
-            "",
-            &error,
-            completed,
-            total,
-            sessions.len(),
-            0,
-            0,
+            ScanProgressPayload {
+                phase: "error",
+                runtime: "",
+                detail: &error,
+                completed,
+                total,
+                sessions: sessions.len(),
+                file_completed: 0,
+                file_total: 0,
+            },
         );
         return Err(error);
     }
@@ -337,14 +356,16 @@ async fn rescan_runtimes_with_progress(
     let dashboard = local_stats::replace_runtime_sessions(&scanned_runtimes, &sessions)?;
     emit_scan_progress(
         &app,
-        "done",
-        "",
-        &format!("Scanned {} sessions", dashboard.session_count),
-        completed,
-        total,
-        dashboard.session_count as usize,
-        1,
-        1,
+        ScanProgressPayload {
+            phase: "done",
+            runtime: "",
+            detail: &format!("Scanned {} sessions", dashboard.session_count),
+            completed,
+            total,
+            sessions: dashboard.session_count as usize,
+            file_completed: 1,
+            file_total: 1,
+        },
     );
     Ok(dashboard)
 }
@@ -352,38 +373,24 @@ async fn rescan_runtimes_with_progress(
 fn enabled_runtime_names(collectors: &SharedCollectors, runtimes: &[String]) -> Vec<String> {
     collectors
         .iter()
-        .filter_map(|collector| {
-            runtimes
-                .iter()
-                .any(|runtime| runtime == collector.name())
-                .then(|| collector.name().to_string())
-        })
+        .filter(|collector| runtimes.iter().any(|runtime| runtime == collector.name()))
+        .map(|collector| collector.name().to_string())
         .collect()
 }
 
-fn emit_scan_progress(
-    app: &Option<tauri::AppHandle>,
-    phase: &str,
-    runtime: &str,
-    detail: &str,
-    completed: usize,
-    total: usize,
-    sessions: usize,
-    file_completed: usize,
-    file_total: usize,
-) {
+fn emit_scan_progress(app: &Option<tauri::AppHandle>, progress: ScanProgressPayload<'_>) {
     if let Some(app) = app {
         app.emit(
             "scan-progress",
             ScanProgress {
-                phase: phase.to_string(),
-                runtime: runtime.to_string(),
-                detail: detail.to_string(),
-                completed,
-                total,
-                sessions,
-                file_completed,
-                file_total,
+                phase: progress.phase.to_string(),
+                runtime: progress.runtime.to_string(),
+                detail: progress.detail.to_string(),
+                completed: progress.completed,
+                total: progress.total,
+                sessions: progress.sessions,
+                file_completed: progress.file_completed,
+                file_total: progress.file_total,
             },
         )
         .ok();

@@ -264,8 +264,7 @@ fn parse_jsonl_incremental(
             break;
         }
 
-        if let Some((key, hb)) =
-            parse_line(&line, &machine_id, platform, project_context.as_deref())
+        if let Some((key, hb)) = parse_line(&line, machine_id, platform, project_context.as_deref())
         {
             bytes_read += n as u64;
             dedup.insert(key, hb);

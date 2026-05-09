@@ -34,13 +34,13 @@ pub fn get_machine_id() -> Result<String, String> {
             .find(|line| line.contains("IOPlatformUUID"))
             .and_then(|line| line.split('"').nth(3))
             .ok_or("cannot read macOS IOPlatformUUID")?;
-        return validate_machine_id(id);
+        validate_machine_id(id)
     }
 
     #[cfg(target_os = "linux")]
     {
         let id = std::fs::read_to_string("/etc/machine-id").map_err(|e| e.to_string())?;
-        return validate_machine_id(id.trim());
+        validate_machine_id(id.trim())
     }
 
     #[cfg(target_os = "windows")]
@@ -60,7 +60,7 @@ pub fn get_machine_id() -> Result<String, String> {
             .find(|line| line.contains("MachineGuid"))
             .and_then(|line| line.split_whitespace().last())
             .ok_or("cannot read Windows MachineGuid")?;
-        return validate_machine_id(id);
+        validate_machine_id(id)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]

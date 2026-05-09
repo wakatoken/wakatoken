@@ -229,7 +229,7 @@ fn parse_jsonl_incremental(
         if let Some(items) = parse_line(
             &line,
             &format!("{}:{line_start}", path.display()),
-            &machine_id,
+            machine_id,
             platform,
             &mut context,
         ) {

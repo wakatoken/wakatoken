@@ -246,7 +246,7 @@ fn parse_jsonl_incremental(
             break;
         }
 
-        if let Some(hb) = parse_line(&line, path, &machine_id, platform, &mut context) {
+        if let Some(hb) = parse_line(&line, path, machine_id, platform, &mut context) {
             bytes_read += n as u64;
             let eid = hb.event_id.clone();
             dedup.insert(eid, hb);

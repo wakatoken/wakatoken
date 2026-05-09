@@ -69,7 +69,7 @@ pub(crate) fn project_name_from_repository_text(text: &str) -> Option<String> {
         .split_whitespace()
         .next()
         .unwrap_or(repo)
-        .trim_end_matches(|c: char| c == ',' || c == ';' || c == ')');
+        .trim_end_matches([',', ';', ')']);
     let project = repo_path
         .trim_end_matches(".git")
         .trim_end_matches('/')

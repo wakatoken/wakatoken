@@ -242,7 +242,7 @@ fn parse_jsonl_incremental(
 
         let event_fallback = format!("{}:{line_start}", path.display());
         if let Some(hb) =
-            parse_message_record(&line, &event_fallback, &project, &machine_id, platform)
+            parse_message_record(&line, &event_fallback, &project, machine_id, platform)
         {
             bytes_read += n as u64;
             dedup.insert(hb.event_id.clone(), hb);
@@ -282,7 +282,7 @@ fn parse_json_snapshot(
 
     for (idx, msg) in messages.iter().enumerate() {
         let event_fallback = format!("{}:{idx}", path.display());
-        if let Some(hb) = parse_message_value(msg, &event_fallback, &project, &machine_id, platform)
+        if let Some(hb) = parse_message_value(msg, &event_fallback, &project, machine_id, platform)
         {
             dedup.insert(hb.event_id.clone(), hb);
         }

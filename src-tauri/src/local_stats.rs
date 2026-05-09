@@ -343,8 +343,8 @@ fn query_sessions(
         params_vec.push(runtime);
     }
     sql.push_str(" GROUP BY session_path, runtime ORDER BY MAX(event_ts) DESC");
-    if limit.is_some() {
-        sql.push_str(&format!(" LIMIT {}", limit.unwrap()));
+    if let Some(limit) = limit {
+        sql.push_str(&format!(" LIMIT {limit}"));
     }
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
