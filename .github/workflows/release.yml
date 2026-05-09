@@ -29,9 +29,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
+          - platform: macos-15
             rust-target: aarch64-apple-darwin
-          - platform: macos-latest
+          - platform: macos-15-intel
             rust-target: x86_64-apple-darwin
           - platform: ubuntu-22.04
             rust-target: ''
@@ -57,6 +57,54 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Sync release version
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+
+          const version = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+
+          function writeJson(path, update) {
+            const value = JSON.parse(fs.readFileSync(path, "utf8"));
+            update(value);
+            fs.writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+          }
+
+          function replaceRequired(path, pattern, replacement) {
+            const value = fs.readFileSync(path, "utf8");
+            if (!pattern.test(value)) {
+              throw new Error(`Version pattern not found in ${path}`);
+            }
+            fs.writeFileSync(path, value.replace(pattern, replacement));
+          }
+
+          writeJson("package.json", (value) => {
+            value.version = version;
+          });
+
+          writeJson("package-lock.json", (value) => {
+            value.version = version;
+            value.packages[""].version = version;
+          });
+
+          writeJson("src-tauri/tauri.conf.json", (value) => {
+            value.version = version;
+          });
+
+          replaceRequired(
+            "src-tauri/Cargo.toml",
+            /^version = ".*"$/m,
+            `version = "${version}"`,
+          );
+
+          replaceRequired(
+            "src-tauri/Cargo.lock",
+            /(\[\[package\]\]\nname = "wakatoken"\nversion = ")[^"]+(")/,
+            `$1${version}$2`,
+          );
+          NODE
 
       - name: Install Node.js dependencies
         run: npm install
