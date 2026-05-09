@@ -17,6 +17,7 @@ pub struct Heartbeat {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
+    pub input_context_tokens: u64,
     pub event_ts: i64,
 }
 
@@ -114,6 +115,7 @@ mod tests {
             output_tokens: 500,
             cache_read_tokens: 200,
             cache_write_tokens: 100,
+            input_context_tokens: 1300,
             event_ts: 1710000000000,
         }
     }
@@ -165,11 +167,13 @@ mod tests {
             "outputTokens": 7,
             "cacheReadTokens": 0,
             "cacheWriteTokens": 0,
+            "inputContextTokens": 42,
             "eventTs": 1710000001000
         }"#;
         let hb: Heartbeat = serde_json::from_str(json).unwrap();
         assert_eq!(hb.machine_id, "6f1ed002ab5595859014ebf0951522d9");
         assert_eq!(hb.git_branch, "feature");
         assert_eq!(hb.input_tokens, 42);
+        assert_eq!(hb.input_context_tokens, 42);
     }
 }

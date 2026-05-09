@@ -330,6 +330,14 @@ fn parse_line(
     if input_tokens == 0 && output_tokens == 0 {
         return None;
     }
+    let cache_read_tokens = usage
+        .get("cache_read_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_write_tokens = usage
+        .get("cache_creation_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
 
     let timestamp = record.get("timestamp")?.as_str()?;
     let event_ts = chrono::DateTime::parse_from_rfc3339(timestamp)
@@ -374,14 +382,9 @@ fn parse_line(
             tool,
             input_tokens,
             output_tokens,
-            cache_read_tokens: usage
-                .get("cache_read_input_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-            cache_write_tokens: usage
-                .get("cache_creation_input_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
+            cache_read_tokens,
+            cache_write_tokens,
+            input_context_tokens: input_tokens + cache_read_tokens + cache_write_tokens,
             event_ts,
         },
     ))
@@ -510,6 +513,33 @@ mod tests {
         let (key, hb) = r.unwrap();
         assert_eq!(key, "m1:r1");
         assert_eq!(hb.input_tokens, 100);
+        assert_eq!(hb.input_context_tokens, 100);
+    }
+
+    #[test]
+    fn parse_line_counts_cache_in_input_context_tokens() {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "requestId": "r1",
+            "timestamp": "2024-03-10T12:00:00.000Z",
+            "cwd": "/home/user/myproject",
+            "message": {
+                "id": "m1",
+                "model": "claude-3-5-sonnet",
+                "content": [],
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_read_input_tokens": 20,
+                    "cache_creation_input_tokens": 30
+                }
+            }
+        })
+        .to_string();
+
+        let (_, hb) = parse_line(&line, "host", "macos", None).unwrap();
+
+        assert_eq!(hb.input_context_tokens, 150);
     }
 
     #[test]

@@ -360,6 +360,7 @@ fn parse_message_value(
         output_tokens,
         cache_read_tokens,
         cache_write_tokens: 0,
+        input_context_tokens: raw_input_tokens,
         event_ts,
     })
 }
@@ -430,6 +431,7 @@ mod tests {
         assert_eq!(hb.input_tokens, 100);
         assert_eq!(hb.output_tokens, 40);
         assert_eq!(hb.cache_read_tokens, 20);
+        assert_eq!(hb.input_context_tokens, 120);
     }
 
     #[test]

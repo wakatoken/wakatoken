@@ -71,6 +71,7 @@ mod tests {
             output_tokens: 50,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            input_context_tokens: 100,
             event_ts: 1710000000000,
         }
     }
@@ -91,6 +92,7 @@ mod tests {
         let json = serde_json::to_value(&[sample_heartbeat("e1")]).unwrap();
         assert!(json[0].get("eventId").is_some());
         assert!(json[0].get("machineId").is_some());
+        assert_eq!(json[0]["inputContextTokens"], 100);
         assert!(json[0].get("machine").is_none());
     }
 }

@@ -164,7 +164,7 @@ pub fn pending_heartbeats(limit: usize) -> Result<Vec<PendingHeartbeat>, String>
     let mut stmt = conn
         .prepare(
             "SELECT event_id, project, provider, model, runtime, os, machine_id, git_branch, language, tool,
-                    input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, event_ts
+                    input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, input_context_tokens, event_ts
              FROM events
              WHERE upload_status != ?1
              ORDER BY event_ts ASC
@@ -192,7 +192,8 @@ pub fn pending_heartbeats(limit: usize) -> Result<Vec<PendingHeartbeat>, String>
                     output_tokens: row.get::<_, i64>(11)? as u64,
                     cache_read_tokens: row.get::<_, i64>(12)? as u64,
                     cache_write_tokens: row.get::<_, i64>(13)? as u64,
-                    event_ts: row.get(14)?,
+                    input_context_tokens: row.get::<_, i64>(14)? as u64,
+                    event_ts: row.get(15)?,
                 },
             })
         })
@@ -250,8 +251,8 @@ fn upsert_event(
         "INSERT INTO events (
             event_id, session_path, runtime, project, provider, model, os, machine_id, git_branch,
             language, tool, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-            event_ts, upload_status, last_error, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, '', ?18, ?18)
+            input_context_tokens, event_ts, upload_status, last_error, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, '', ?19, ?19)
         ON CONFLICT(event_id) DO UPDATE SET
             session_path = excluded.session_path,
             runtime = excluded.runtime,
@@ -267,6 +268,7 @@ fn upsert_event(
             output_tokens = excluded.output_tokens,
             cache_read_tokens = excluded.cache_read_tokens,
             cache_write_tokens = excluded.cache_write_tokens,
+            input_context_tokens = excluded.input_context_tokens,
             event_ts = excluded.event_ts,
             updated_at = excluded.updated_at",
         params![
@@ -285,6 +287,7 @@ fn upsert_event(
             heartbeat.output_tokens as i64,
             heartbeat.cache_read_tokens as i64,
             heartbeat.cache_write_tokens as i64,
+            heartbeat.input_context_tokens as i64,
             heartbeat.event_ts,
             STATUS_LOCAL,
             chrono::Utc::now().timestamp_millis(),
@@ -485,6 +488,7 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             output_tokens INTEGER NOT NULL,
             cache_read_tokens INTEGER NOT NULL,
             cache_write_tokens INTEGER NOT NULL,
+            input_context_tokens INTEGER NOT NULL DEFAULT 0,
             event_ts INTEGER NOT NULL,
             upload_status TEXT NOT NULL,
             last_error TEXT NOT NULL DEFAULT '',
@@ -503,7 +507,34 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             PRIMARY KEY (runtime, path)
         );",
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    ensure_column(
+        conn,
+        "events",
+        "input_context_tokens",
+        "ALTER TABLE events ADD COLUMN input_context_tokens INTEGER NOT NULL DEFAULT 0",
+    )
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    alter_sql: &str,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| e.to_string())?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    if columns.iter().any(|name| name == column) {
+        return Ok(());
+    }
+    conn.execute(alter_sql, []).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn has_events(conn: &Connection) -> Result<bool, String> {
@@ -541,6 +572,7 @@ mod tests {
             output_tokens: output,
             cache_read_tokens: 1,
             cache_write_tokens: 2,
+            input_context_tokens: input + 3,
             event_ts: 1710000000000,
         }
     }

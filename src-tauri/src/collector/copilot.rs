@@ -405,6 +405,7 @@ fn parse_line(
             output_tokens,
             cache_read_tokens,
             cache_write_tokens,
+            input_context_tokens: 0,
             event_ts,
         });
     }
