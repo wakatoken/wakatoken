@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src/logo.svg" alt="WakaToken" width="96" height="96">
+</p>
+
 # WakaToken
 
 A lightweight desktop app that tracks your AI coding assistant token usage. Runs silently in the system tray, collects usage data from Claude Code, Codex CLI, GitHub Copilot sessions, and Gemini CLI sessions, and syncs to the [WakaToken dashboard](https://wkt.tftt.cc).
