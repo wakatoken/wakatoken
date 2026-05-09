@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use tauri::image::Image;
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, WebviewWindow, WindowEvent};
 use tauri_plugin_opener::OpenerExt;
 
 const TRAY_ID: &str = "main-tray";
@@ -227,18 +227,55 @@ fn open_url(app: &AppHandle, url: &str) {
 }
 
 pub fn show_main_window(app: &AppHandle) {
+    show_in_dock(app);
+
     if let Some(window) = app.get_webview_window("main") {
         window.show().ok();
         window.set_focus().ok();
         return;
     }
 
-    tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
-        .title("WakaToken")
-        .inner_size(1120.0, 760.0)
-        .min_inner_size(940.0, 640.0)
-        .resizable(true)
-        .center()
-        .build()
+    if let Ok(window) =
+        tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+            .title("WakaToken")
+            .inner_size(1120.0, 760.0)
+            .min_inner_size(940.0, 640.0)
+            .resizable(true)
+            .center()
+            .build()
+    {
+        handle_close_to_tray(app, &window);
+        window.set_focus().ok();
+    }
+}
+
+fn handle_close_to_tray(app: &AppHandle, window: &WebviewWindow) {
+    let app = app.clone();
+    let window = window.clone();
+
+    window.clone().on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            window.hide().ok();
+            hide_from_dock(&app);
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn show_in_dock(app: &AppHandle) {
+    app.set_activation_policy(tauri::ActivationPolicy::Regular)
         .ok();
 }
+
+#[cfg(not(target_os = "macos"))]
+fn show_in_dock(_app: &AppHandle) {}
+
+#[cfg(target_os = "macos")]
+fn hide_from_dock(app: &AppHandle) {
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory)
+        .ok();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hide_from_dock(_app: &AppHandle) {}
