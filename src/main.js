@@ -13,10 +13,12 @@ const workspaceTitle = document.getElementById("workspace-title");
 const localTotal = document.getElementById("local-total");
 const localInput = document.getElementById("local-input");
 const localOutput = document.getElementById("local-output");
+const localCache = document.getElementById("local-cache");
 const localSessions = document.getElementById("local-sessions");
 const todayLocalTotal = document.getElementById("today-local-total");
 const todayLocalInput = document.getElementById("today-local-input");
 const todayLocalOutput = document.getElementById("today-local-output");
+const todayLocalCache = document.getElementById("today-local-cache");
 const todayLocalSessions = document.getElementById("today-local-sessions");
 const runtimeList = document.getElementById("runtime-list");
 const runtimeFilter = document.getElementById("runtime-filter");
@@ -99,10 +101,16 @@ function renderLocalDashboard(dashboard) {
   localTotal.textContent = formatTokensShort(dashboard.totalTokens);
   localInput.textContent = formatTokensShort(dashboard.totalInputTokens);
   localOutput.textContent = formatTokensShort(dashboard.totalOutputTokens);
+  localCache.textContent = formatTokensShort(
+    dashboard.totalCacheReadTokens + dashboard.totalCacheWriteTokens,
+  );
   localSessions.textContent = formatCount(dashboard.sessionCount);
   todayLocalTotal.textContent = formatTokensShort(dashboard.todayTokens);
   todayLocalInput.textContent = formatTokensShort(dashboard.todayInputTokens);
   todayLocalOutput.textContent = formatTokensShort(dashboard.todayOutputTokens);
+  todayLocalCache.textContent = formatTokensShort(
+    dashboard.todayCacheReadTokens + dashboard.todayCacheWriteTokens,
+  );
   todayLocalSessions.textContent = formatCount(dashboard.todaySessionCount);
 }
 
@@ -310,6 +318,7 @@ function showView(view) {
 }
 
 function formatTokensShort(n) {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return `${n}`;
