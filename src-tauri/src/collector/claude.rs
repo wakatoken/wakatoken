@@ -216,11 +216,18 @@ fn parse_jsonl_incremental(
         if n == 0 {
             break;
         }
-        bytes_read += n as u64;
 
         if let Some((key, hb)) = parse_line(&line, &machine_id, platform) {
+            bytes_read += n as u64;
             dedup.insert(key, hb);
+            continue;
         }
+
+        if !line.ends_with('\n') {
+            break;
+        }
+
+        bytes_read += n as u64;
     }
 
     Ok((dedup.into_values().collect(), bytes_read))
@@ -473,6 +480,20 @@ mod tests {
         let f = write_temp_jsonl(&[&l, &l]);
         let (hbs, _) = parse_jsonl_incremental(f.path(), 0, TEST_MACHINE_ID).unwrap();
         assert_eq!(hbs.len(), 1);
+    }
+
+    #[test]
+    fn incremental_keeps_partial_final_line_uncommitted() {
+        let complete = assistant_json("m1", "r1", 10, 5);
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, "{}", complete).unwrap();
+        let complete_offset = f.as_file().metadata().unwrap().len();
+        write!(f, r#"{{"type":"assistant""#).unwrap();
+
+        let (hbs, offset) = parse_jsonl_incremental(f.path(), 0, TEST_MACHINE_ID).unwrap();
+
+        assert_eq!(hbs.len(), 1);
+        assert_eq!(offset, complete_offset);
     }
 
     #[test]

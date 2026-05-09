@@ -195,12 +195,19 @@ fn parse_jsonl_incremental(
         if n == 0 {
             break;
         }
-        bytes_read += n as u64;
 
         if let Some(hb) = parse_line(&line, path, &machine_id, platform, &mut context) {
+            bytes_read += n as u64;
             let eid = hb.event_id.clone();
             dedup.insert(eid, hb);
+            continue;
         }
+
+        if !line.ends_with('\n') {
+            break;
+        }
+
+        bytes_read += n as u64;
     }
 
     Ok((dedup.into_values().collect(), bytes_read))

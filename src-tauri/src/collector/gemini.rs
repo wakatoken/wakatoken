@@ -194,14 +194,21 @@ fn parse_jsonl_incremental(
         if n == 0 {
             break;
         }
-        bytes_read += n as u64;
 
         let event_fallback = format!("{}:{line_start}", path.display());
         if let Some(hb) =
             parse_message_record(&line, &event_fallback, &project, &machine_id, platform)
         {
+            bytes_read += n as u64;
             dedup.insert(hb.event_id.clone(), hb);
+            continue;
         }
+
+        if !line.ends_with('\n') {
+            break;
+        }
+
+        bytes_read += n as u64;
     }
 
     Ok((dedup.into_values().collect(), bytes_read))

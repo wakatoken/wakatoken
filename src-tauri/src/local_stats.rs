@@ -92,15 +92,40 @@ pub fn record_session(session: &SessionFile, status: &str, last_error: &str) -> 
 }
 
 pub fn rebuild_from_sessions(sessions: &[SessionFile]) -> Result<LocalDashboard, String> {
+    let previous = load_store()?;
     let store = LocalStatsStore {
         version: STORE_VERSION,
-        sessions: sessions
-            .iter()
-            .map(|session| summarize_session(session, "local", ""))
-            .collect(),
+        sessions: summarize_sessions_preserving_status(sessions, &previous.sessions),
     };
     save_store(&store)?;
     Ok(build_dashboard(&store.sessions))
+}
+
+fn summarize_sessions_preserving_status(
+    sessions: &[SessionFile],
+    previous: &[SessionSummary],
+) -> Vec<SessionSummary> {
+    let previous_status: BTreeMap<String, (String, String)> = previous
+        .iter()
+        .map(|session| {
+            (
+                session.id.clone(),
+                (session.status.clone(), session.last_error.clone()),
+            )
+        })
+        .collect();
+
+    sessions
+        .iter()
+        .map(|session| {
+            let mut summary = summarize_session(session, "local", "");
+            if let Some((status, last_error)) = previous_status.get(&summary.id) {
+                summary.status = status.clone();
+                summary.last_error = last_error.clone();
+            }
+            summary
+        })
+        .collect()
 }
 
 fn summarize_session(session: &SessionFile, status: &str, last_error: &str) -> SessionSummary {
@@ -363,5 +388,38 @@ mod tests {
         assert_eq!(dashboard.runtimes[0].runtime, "codex-cli");
         assert_eq!(dashboard.runtimes[0].total_tokens, 20);
         assert_eq!(dashboard.runtimes[0].session_count, 1);
+    }
+
+    #[test]
+    fn rebuild_preserves_existing_sync_status() {
+        let session = SessionFile {
+            runtime: "claude-code".to_string(),
+            path: PathBuf::from("/tmp/session.jsonl"),
+            offset: 10,
+            heartbeats: vec![heartbeat("e1", "claude-code", 10, 3)],
+        };
+        let previous = vec![SessionSummary {
+            id: "/tmp/session.jsonl".to_string(),
+            path: "/tmp/session.jsonl".to_string(),
+            runtime: "claude-code".to_string(),
+            project: "old".to_string(),
+            model: "old".to_string(),
+            started_at: 1,
+            ended_at: 2,
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            total_tokens: 2,
+            event_count: 1,
+            status: "synced".to_string(),
+            last_error: String::new(),
+        }];
+
+        let summaries = summarize_sessions_preserving_status(&[session], &previous);
+
+        assert_eq!(summaries[0].status, "synced");
+        assert_eq!(summaries[0].input_tokens, 10);
+        assert_eq!(summaries[0].output_tokens, 3);
     }
 }

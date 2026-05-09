@@ -181,7 +181,6 @@ fn parse_jsonl_incremental(
         if n == 0 {
             break;
         }
-        bytes_read += n as u64;
 
         if let Some(items) = parse_line(
             &line,
@@ -190,10 +189,18 @@ fn parse_jsonl_incremental(
             platform,
             &mut context,
         ) {
+            bytes_read += n as u64;
             for hb in items {
                 dedup.insert(hb.event_id.clone(), hb);
             }
+            continue;
         }
+
+        if !line.ends_with('\n') {
+            break;
+        }
+
+        bytes_read += n as u64;
     }
 
     Ok((dedup.into_values().collect(), bytes_read))
