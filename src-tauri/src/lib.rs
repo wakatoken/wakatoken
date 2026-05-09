@@ -1,3 +1,4 @@
+pub mod auto_update;
 pub mod collector;
 pub mod config;
 pub mod credentials;
@@ -542,6 +543,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(status)
         .manage(collectors)
@@ -575,13 +577,16 @@ pub fn run() {
                 collectors_for_scheduler,
                 status_for_scheduler,
             );
+            auto_update::start_periodic_update_check(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building wakatoken")
         .run(|_app, event| {
-            if let RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
+            if let RunEvent::ExitRequested { code, api, .. } = event {
+                if code != Some(tauri::RESTART_EXIT_CODE) {
+                    api.prevent_exit();
+                }
             }
         });
 }
