@@ -202,6 +202,18 @@ pub fn pending_heartbeats(limit: usize) -> Result<Vec<PendingHeartbeat>, String>
         .map_err(|e| e.to_string())
 }
 
+pub fn pending_count() -> Result<u64, String> {
+    let conn = open_db()?;
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE upload_status != ?1",
+            params![STATUS_UPLOADED],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(count as u64)
+}
+
 pub fn mark_uploaded(event_ids: &[String]) -> Result<(), String> {
     update_status(event_ids, STATUS_UPLOADED, "")
 }

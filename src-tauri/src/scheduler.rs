@@ -100,6 +100,16 @@ pub async fn run_sync(
         }
     }
 
+    let total_pending = match crate::local_stats::pending_count() {
+        Ok(count) => count,
+        Err(e) => {
+            let mut s = status.lock().await;
+            s.last_sync_ok = false;
+            s.last_error = e;
+            return;
+        }
+    };
+
     let mut pending = match crate::local_stats::pending_heartbeats(100) {
         Ok(items) => items,
         Err(e) => {
@@ -122,7 +132,7 @@ pub async fn run_sync(
     }
 
     crate::tray::set_syncing(true);
-    emit_progress(app, "Uploading pending events...");
+    emit_progress(app, &format!("Uploading 0/{total_pending} events"));
 
     // 2. Upload pending local events, then mark their upload state.
     let client = reqwest::Client::new();
@@ -131,19 +141,13 @@ pub async fn run_sync(
     let mut total_dedup = 0u64;
     let mut batch_today_input = 0u64;
     let mut batch_today_output = 0u64;
-    let start = std::time::Instant::now();
-    let mut batch_index = 0usize;
+    let mut uploaded_events = 0u64;
+    let upload_started_at = std::time::Instant::now();
 
     while !pending.is_empty() {
-        batch_index += 1;
-        let eta = if batch_index > 1 {
-            let per_batch = start.elapsed().as_secs_f64() / (batch_index - 1) as f64;
-            let remaining = pending.len() as f64 / 100.0 * per_batch;
-            format_eta(remaining.ceil() as u64)
-        } else {
-            String::new()
-        };
-        let progress = format!("Uploading batch {batch_index}{eta}");
+        let next_uploaded = uploaded_events + pending.len() as u64;
+        let eta = upload_eta(upload_started_at, uploaded_events, total_pending);
+        let progress = format!("Uploading {next_uploaded}/{total_pending} events{eta}");
         emit_progress(app, &progress);
         eprintln!("[wakatoken] {progress}");
 
@@ -155,6 +159,7 @@ pub async fn run_sync(
         {
             Ok(result) => {
                 crate::local_stats::mark_uploaded(&event_ids).ok();
+                uploaded_events = next_uploaded;
                 total_new += result.new_count;
                 total_dedup += result.dedup_count;
 
@@ -167,7 +172,7 @@ pub async fn run_sync(
             }
             Err(e) => {
                 crate::local_stats::mark_failed(&event_ids, &e).ok();
-                eprintln!("[wakatoken] batch failed, skipping: {e}");
+                eprintln!("[wakatoken] upload failed after {uploaded_events}/{total_pending}: {e}");
                 break;
             }
         }
@@ -195,21 +200,39 @@ pub async fn run_sync(
     s.today_output_tokens += batch_today_output;
 }
 
+fn upload_eta(started_at: std::time::Instant, uploaded: u64, total: u64) -> String {
+    if uploaded == 0 || uploaded >= total {
+        return String::new();
+    }
+
+    let elapsed = started_at.elapsed().as_secs_f64();
+    if elapsed <= 0.0 {
+        return String::new();
+    }
+
+    let events_per_second = uploaded as f64 / elapsed;
+    if events_per_second <= 0.0 {
+        return String::new();
+    }
+
+    let remaining = total.saturating_sub(uploaded);
+    let seconds = (remaining as f64 / events_per_second).ceil() as u64;
+    format!(", ETA {}", format_duration(seconds))
+}
+
+fn format_duration(seconds: u64) -> String {
+    if seconds >= 60 {
+        format!("{}m{}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 fn reset_if_new_day(status: &mut SyncStatus, today_start: i64) {
     if status.today_date != today_start {
         status.today_date = today_start;
         status.today_input_tokens = 0;
         status.today_output_tokens = 0;
-    }
-}
-
-fn format_eta(secs: u64) -> String {
-    if secs > 60 {
-        format!(", ETA {}m{}s", secs / 60, secs % 60)
-    } else if secs > 0 {
-        format!(", ETA {secs}s")
-    } else {
-        String::new()
     }
 }
 
