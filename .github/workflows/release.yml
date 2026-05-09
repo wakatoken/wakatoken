@@ -61,6 +61,18 @@ jobs:
       - name: Install Node.js dependencies
         run: npm install
 
+      - name: Verify release version
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          TAURI_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          CARGO_VERSION=$(cargo metadata --manifest-path src-tauri/Cargo.toml --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "wakatoken") | .version')
+
+          test "$PACKAGE_VERSION" = "$TAG_VERSION"
+          test "$TAURI_VERSION" = "$TAG_VERSION"
+          test "$CARGO_VERSION" = "$TAG_VERSION"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -79,4 +91,3 @@ jobs:
           releaseDraft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.rust-target != '' && format('--target {0}', matrix.rust-target) || '' }}
-
