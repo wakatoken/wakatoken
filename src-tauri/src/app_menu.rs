@@ -1,9 +1,11 @@
+#[cfg(target_os = "macos")]
 use tauri::image::Image;
-use tauri::menu::{
-    AboutMetadata, Menu, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID,
-};
+use tauri::menu::Menu;
+#[cfg(target_os = "macos")]
+use tauri::menu::{AboutMetadata, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID};
 use tauri::AppHandle;
 
+#[cfg(target_os = "macos")]
 const ABOUT_ICON: &[u8] = include_bytes!("../icons/icon.png");
 
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
