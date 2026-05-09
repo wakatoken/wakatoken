@@ -48,13 +48,29 @@ pub fn create_tray(app: &AppHandle, status: &SharedStatus) -> Result<(), String>
             }
             "dashboard" => open_url(app, &dashboard_url()),
             "show_app" => show_main_window(app),
-            "quit" => std::process::exit(0),
+            "quit" => quit_after_sync(app),
             _ => {}
         })
         .build(app)
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+fn quit_after_sync(app: &AppHandle) {
+    if !crate::scheduler::is_running() {
+        std::process::exit(0);
+    }
+
+    crate::scheduler::request_stop();
+    set_status_text(app, "Stopping sync before quit...");
+    set_syncing(true);
+    tauri::async_runtime::spawn(async move {
+        while crate::scheduler::is_running() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        std::process::exit(0);
+    });
 }
 
 /// Full update after sync — refreshes all menu item texts and tooltip.

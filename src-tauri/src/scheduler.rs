@@ -11,6 +11,7 @@ use tokio::time::{interval_at, Duration, Instant};
 
 const SYNC_INTERVAL_SECS: u64 = 300;
 static SYNC_RUNNING: AtomicBool = AtomicBool::new(false);
+static SYNC_STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 struct SyncRunGuard;
 
@@ -19,7 +20,10 @@ impl SyncRunGuard {
         SYNC_RUNNING
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .ok()
-            .map(|_| Self)
+            .map(|_| {
+                SYNC_STOP_REQUESTED.store(false, Ordering::Release);
+                Self
+            })
     }
 }
 
@@ -56,6 +60,18 @@ pub fn new_shared_status() -> SharedStatus {
     Arc::new(Mutex::new(SyncStatus::default()))
 }
 
+pub fn request_stop() {
+    SYNC_STOP_REQUESTED.store(true, Ordering::Release);
+}
+
+pub fn is_running() -> bool {
+    SYNC_RUNNING.load(Ordering::Acquire)
+}
+
+fn stop_requested() -> bool {
+    SYNC_STOP_REQUESTED.load(Ordering::Acquire)
+}
+
 fn emit_sync_progress(app: &Option<AppHandle>, phase: &str, detail: &str) {
     if let Some(app) = app {
         crate::tray::set_status_text(app, detail);
@@ -81,6 +97,15 @@ fn emit_done(app: &Option<AppHandle>, detail: &str) {
 
 fn emit_error(app: &Option<AppHandle>, detail: &str) {
     emit_sync_progress(app, "error", detail);
+}
+
+async fn stop_sync(app: &Option<AppHandle>, status: &SharedStatus) {
+    crate::tray::set_syncing(false);
+    emit_done(app, "Sync stopped");
+    let mut s = status.lock().await;
+    s.last_sync_ts = chrono::Utc::now().timestamp();
+    s.last_sync_ok = false;
+    s.last_error = "Sync stopped".to_string();
 }
 
 pub async fn run_sync(
@@ -118,6 +143,10 @@ pub async fn run_sync(
     eprintln!("[wakatoken] scanning...");
 
     for c in collectors {
+        if stop_requested() {
+            stop_sync(app, status).await;
+            return;
+        }
         if !config.runtime_enabled(c.name()) {
             continue;
         }
@@ -136,6 +165,11 @@ pub async fn run_sync(
             }
             Err(e) => eprintln!("[wakatoken] collector {} error: {e}", c.name()),
         }
+    }
+
+    if stop_requested() {
+        stop_sync(app, status).await;
+        return;
     }
 
     let total_pending = match crate::local_stats::pending_count() {
@@ -185,6 +219,11 @@ pub async fn run_sync(
     let upload_started_at = std::time::Instant::now();
 
     while !pending.is_empty() {
+        if stop_requested() {
+            stop_sync(app, status).await;
+            return;
+        }
+
         let next_uploaded = uploaded_events + pending.len() as u64;
         let eta = upload_eta(upload_started_at, uploaded_events, total_pending);
         let progress = format!("Uploading {next_uploaded}/{total_pending} events{eta}");
