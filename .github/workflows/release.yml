@@ -101,7 +101,7 @@ jobs:
 
           replaceRequired(
             "src-tauri/Cargo.lock",
-            /(\[\[package\]\]\nname = "wakatoken"\nversion = ")[^"]+(")/,
+            /(\[\[package\]\]\r?\nname = "wakatoken"\r?\nversion = ")[^"]+(")/,
             `$1${version}$2`,
           );
           NODE
