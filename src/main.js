@@ -45,6 +45,7 @@ let selectedRuntime = "all";
 let appConfig = null;
 let account = { signedIn: false, name: "", email: "", image: null };
 let scanState = { active: new Set(), runtimes: new Map(), completed: 0, total: 0 };
+let syncActive = false;
 
 const runtimes = [
   { id: "claude-code", label: "Claude Code" },
@@ -405,12 +406,18 @@ async function absoluteUrl(url) {
 // Listen for sync progress events (from background sync)
 const syncProgressReady = listen("sync-progress", (event) => {
   const { phase, detail } = event.payload;
+  if (phase === "syncing") {
+    setSyncBusy(true);
+    statsFooter.textContent = detail;
+    return;
+  }
+
   if (phase === "done" || phase === "error") {
+    setSyncBusy(false);
     loadStatus();
     loadLocalDashboard();
-  } else {
-    statsFooter.textContent = detail;
   }
+  statsFooter.textContent = detail;
 });
 
 const scanProgressReady = listen("scan-progress", async (event) => {
@@ -480,7 +487,8 @@ async function collectOnboardingRuntimes() {
 }
 
 async function syncNow() {
-  setButtonsBusy(syncNowButtons, true, "Syncing...");
+  if (syncActive) return;
+  setSyncBusy(true);
   try {
     await invoke("sync_now");
     await loadStatus();
@@ -488,7 +496,7 @@ async function syncNow() {
   } catch (e) {
     statsFooter.textContent = `Sync failed: ${e}`;
   } finally {
-    setButtonsBusy(syncNowButtons, false, "Sync now");
+    setSyncBusy(false);
   }
 }
 
@@ -499,15 +507,26 @@ function setButtonsBusy(buttons, busy, text) {
   }
 }
 
+function setSyncBusy(active) {
+  syncActive = active;
+  updateSyncButtons();
+}
+
+function updateSyncButtons() {
+  const disabled = syncActive || scanState.active.size > 0;
+  for (const button of syncNowButtons) {
+    button.disabled = disabled;
+    button.textContent = syncActive ? "Syncing..." : "Sync now";
+  }
+}
+
 function setScanBusy(activeRuntimes) {
   resetScanProgress(activeRuntimes);
   for (const runtime of activeRuntimes) {
     scanState.active.add(runtime);
   }
   updateScanButtons();
-  for (const button of syncNowButtons) {
-    button.disabled = scanState.active.size > 0;
-  }
+  updateSyncButtons();
 }
 
 function clearScanBusy(runtimes) {
@@ -515,9 +534,7 @@ function clearScanBusy(runtimes) {
     scanState.active.delete(runtime);
   }
   updateScanButtons();
-  for (const button of syncNowButtons) {
-    button.disabled = scanState.active.size > 0;
-  }
+  updateSyncButtons();
 }
 
 function updateScanButtons() {

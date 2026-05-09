@@ -3,12 +3,31 @@ use crate::config::AppConfig;
 use crate::credentials::AuthCredentials;
 use crate::reporter;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use tokio::time::{interval_at, Duration, Instant};
 
 const SYNC_INTERVAL_SECS: u64 = 300;
+static SYNC_RUNNING: AtomicBool = AtomicBool::new(false);
+
+struct SyncRunGuard;
+
+impl SyncRunGuard {
+    fn acquire() -> Option<Self> {
+        SYNC_RUNNING
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .ok()
+            .map(|_| Self)
+    }
+}
+
+impl Drop for SyncRunGuard {
+    fn drop(&mut self) {
+        SYNC_RUNNING.store(false, Ordering::Release);
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -37,13 +56,13 @@ pub fn new_shared_status() -> SharedStatus {
     Arc::new(Mutex::new(SyncStatus::default()))
 }
 
-fn emit_progress(app: &Option<AppHandle>, detail: &str) {
+fn emit_sync_progress(app: &Option<AppHandle>, phase: &str, detail: &str) {
     if let Some(app) = app {
         crate::tray::set_status_text(app, detail);
         app.emit(
             "sync-progress",
             SyncProgress {
-                phase: "syncing".to_string(),
+                phase: phase.to_string(),
                 detail: detail.to_string(),
                 percent: 0,
             },
@@ -52,17 +71,35 @@ fn emit_progress(app: &Option<AppHandle>, detail: &str) {
     }
 }
 
+fn emit_progress(app: &Option<AppHandle>, detail: &str) {
+    emit_sync_progress(app, "syncing", detail);
+}
+
+fn emit_done(app: &Option<AppHandle>, detail: &str) {
+    emit_sync_progress(app, "done", detail);
+}
+
+fn emit_error(app: &Option<AppHandle>, detail: &str) {
+    emit_sync_progress(app, "error", detail);
+}
+
 pub async fn run_sync(
     app: &Option<AppHandle>,
     collectors: &[Box<dyn Collector>],
     status: &SharedStatus,
 ) {
+    let Some(_guard) = SyncRunGuard::acquire() else {
+        eprintln!("[wakatoken] sync already running, skipping");
+        return;
+    };
+
     let config = AppConfig::load();
     let credentials = AuthCredentials::load();
     if !credentials.signed_in() {
         let mut s = status.lock().await;
         s.last_sync_ok = false;
         s.last_error = "Authentication not configured".to_string();
+        emit_error(app, &s.last_error);
         return;
     }
     let machine_id = match crate::heartbeat::get_machine_id() {
@@ -71,6 +108,7 @@ pub async fn run_sync(
             let mut s = status.lock().await;
             s.last_sync_ok = false;
             s.last_error = e;
+            emit_error(app, &s.last_error);
             return;
         }
     };
@@ -106,6 +144,7 @@ pub async fn run_sync(
             let mut s = status.lock().await;
             s.last_sync_ok = false;
             s.last_error = e;
+            emit_error(app, &s.last_error);
             return;
         }
     };
@@ -116,13 +155,14 @@ pub async fn run_sync(
             let mut s = status.lock().await;
             s.last_sync_ok = false;
             s.last_error = e;
+            emit_error(app, &s.last_error);
             return;
         }
     };
 
     if pending.is_empty() {
         eprintln!("[wakatoken] nothing to upload");
-        emit_progress(app, "No new data");
+        emit_done(app, "No new data");
         let mut s = status.lock().await;
         s.last_sync_ts = chrono::Utc::now().timestamp();
         s.last_sync_ok = true;
@@ -189,7 +229,7 @@ pub async fn run_sync(
     crate::tray::set_syncing(false);
     let msg = format!("{total_new} new, {total_dedup} dedup");
     eprintln!("[wakatoken] done: {msg}");
-    emit_progress(app, &msg);
+    emit_done(app, &msg);
     let mut s = status.lock().await;
     s.last_sync_ts = chrono::Utc::now().timestamp();
     s.last_sync_ok = true;
