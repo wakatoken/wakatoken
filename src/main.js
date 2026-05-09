@@ -137,6 +137,7 @@ function renderRuntimes(runtimes, totalTokens) {
         <span class="runtime-metrics">
           <b>${formatTokensShort(runtime.totalTokens)}</b>
           <small>${formatTokensShort(runtime.inputTokens)} in · ${formatTokensShort(runtime.outputTokens)} out</small>
+          <small>${formatTokensShort(runtime.cacheReadTokens + runtime.cacheWriteTokens)} cache</small>
           <small>${share}% of total</small>
         </span>
       </button>

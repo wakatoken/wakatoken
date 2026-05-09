@@ -266,10 +266,11 @@ fn parse_message_value(
     }
 
     let tokens = record.get("tokens")?;
-    let input_tokens = tokens.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
+    let raw_input_tokens = tokens.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
     let output_tokens = tokens.get("output").and_then(|v| v.as_u64()).unwrap_or(0);
     let cache_read_tokens = tokens.get("cached").and_then(|v| v.as_u64()).unwrap_or(0);
-    if input_tokens == 0 && output_tokens == 0 {
+    let input_tokens = raw_input_tokens.saturating_sub(cache_read_tokens);
+    if input_tokens == 0 && output_tokens == 0 && cache_read_tokens == 0 {
         return None;
     }
 
@@ -360,7 +361,7 @@ mod tests {
         assert_eq!(hb.event_id, "gemini:m1");
         assert_eq!(hb.provider, "google");
         assert_eq!(hb.model, "gemini-3-flash-preview");
-        assert_eq!(hb.input_tokens, 120);
+        assert_eq!(hb.input_tokens, 100);
         assert_eq!(hb.output_tokens, 40);
         assert_eq!(hb.cache_read_tokens, 20);
     }

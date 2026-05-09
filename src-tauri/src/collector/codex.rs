@@ -334,7 +334,7 @@ fn parse_line(
         .get("last_token_usage")
         .or_else(|| info.get("total_token_usage"))?;
 
-    let input_tokens = usage
+    let raw_input_tokens = usage
         .get("input_tokens")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
@@ -346,8 +346,9 @@ fn parse_line(
         .get("cached_input_tokens")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    let input_tokens = raw_input_tokens.saturating_sub(cache_read_tokens);
 
-    if input_tokens == 0 && output_tokens == 0 {
+    if input_tokens == 0 && output_tokens == 0 && cache_read_tokens == 0 {
         return None;
     }
 
@@ -515,7 +516,7 @@ mod tests {
         assert_eq!(hb.project, "myproject");
         assert_eq!(hb.provider, "openai");
         assert_eq!(hb.git_branch, "main");
-        assert_eq!(hb.input_tokens, 120);
+        assert_eq!(hb.input_tokens, 90);
         assert_eq!(hb.output_tokens, 40);
         assert_eq!(hb.cache_read_tokens, 30);
     }

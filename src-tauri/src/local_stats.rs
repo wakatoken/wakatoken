@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
+const STORE_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalDashboard {
@@ -58,6 +60,8 @@ pub struct SessionSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct LocalStatsStore {
+    #[serde(default)]
+    version: u32,
     sessions: Vec<SessionSummary>,
 }
 
@@ -89,6 +93,7 @@ pub fn record_session(session: &SessionFile, status: &str, last_error: &str) -> 
 
 pub fn rebuild_from_sessions(sessions: &[SessionFile]) -> Result<LocalDashboard, String> {
     let store = LocalStatsStore {
+        version: STORE_VERSION,
         sessions: sessions
             .iter()
             .map(|session| summarize_session(session, "local", ""))
@@ -133,7 +138,12 @@ fn summarize_session(session: &SessionFile, status: &str, last_error: &str) -> S
         output_tokens,
         cache_read_tokens,
         cache_write_tokens,
-        total_tokens: input_tokens + output_tokens,
+        total_tokens: token_total(
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+        ),
         event_count: session.heartbeats.len() as u64,
         status: status.to_string(),
         last_error: last_error.to_string(),
@@ -172,17 +182,36 @@ fn build_dashboard(sessions: &[SessionSummary]) -> LocalDashboard {
         runtime.last_seen_at = runtime.last_seen_at.max(session.ended_at);
     }
 
-    dashboard.total_tokens = dashboard.total_input_tokens + dashboard.total_output_tokens;
-    dashboard.today_tokens = dashboard.today_input_tokens + dashboard.today_output_tokens;
+    dashboard.total_tokens = token_total(
+        dashboard.total_input_tokens,
+        dashboard.total_output_tokens,
+        dashboard.total_cache_read_tokens,
+        dashboard.total_cache_write_tokens,
+    );
+    dashboard.today_tokens = token_total(
+        dashboard.today_input_tokens,
+        dashboard.today_output_tokens,
+        dashboard.today_cache_read_tokens,
+        dashboard.today_cache_write_tokens,
+    );
     dashboard.session_count = sessions.len() as u64;
     dashboard.runtimes = runtimes
         .into_values()
         .map(|mut runtime| {
-            runtime.total_tokens = runtime.input_tokens + runtime.output_tokens;
+            runtime.total_tokens = token_total(
+                runtime.input_tokens,
+                runtime.output_tokens,
+                runtime.cache_read_tokens,
+                runtime.cache_write_tokens,
+            );
             runtime
         })
         .collect();
     dashboard
+}
+
+fn token_total(input: u64, output: u64, cache_read: u64, cache_write: u64) -> u64 {
+    input + output + cache_read + cache_write
 }
 
 fn today_start_millis() -> i64 {
@@ -201,7 +230,47 @@ fn load_store() -> Result<LocalStatsStore, String> {
         return Ok(LocalStatsStore::default());
     }
     let data = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&data).map_err(|e| e.to_string())
+    let mut store: LocalStatsStore = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    if store.version < STORE_VERSION {
+        normalize_legacy_sessions(&mut store.sessions);
+        store.version = STORE_VERSION;
+        save_store(&store)?;
+        return Ok(store);
+    }
+    refresh_session_totals(&mut store.sessions);
+    Ok(store)
+}
+
+fn normalize_legacy_sessions(sessions: &mut [SessionSummary]) {
+    for session in sessions {
+        if input_includes_cache(&session.runtime) {
+            session.input_tokens = session
+                .input_tokens
+                .saturating_sub(session.cache_read_tokens)
+                .saturating_sub(session.cache_write_tokens);
+        }
+        session.total_tokens = token_total(
+            session.input_tokens,
+            session.output_tokens,
+            session.cache_read_tokens,
+            session.cache_write_tokens,
+        );
+    }
+}
+
+fn refresh_session_totals(sessions: &mut [SessionSummary]) {
+    for session in sessions {
+        session.total_tokens = token_total(
+            session.input_tokens,
+            session.output_tokens,
+            session.cache_read_tokens,
+            session.cache_write_tokens,
+        );
+    }
+}
+
+fn input_includes_cache(runtime: &str) -> bool {
+    matches!(runtime, "codex-cli" | "gemini-cli" | "copilot-agent")
 }
 
 fn save_store(store: &LocalStatsStore) -> Result<(), String> {
@@ -260,7 +329,9 @@ mod tests {
         assert_eq!(summary.runtime, "claude-code");
         assert_eq!(summary.input_tokens, 17);
         assert_eq!(summary.output_tokens, 5);
-        assert_eq!(summary.total_tokens, 22);
+        assert_eq!(summary.cache_read_tokens, 2);
+        assert_eq!(summary.cache_write_tokens, 4);
+        assert_eq!(summary.total_tokens, 28);
         assert_eq!(summary.event_count, 2);
     }
 
@@ -276,9 +347,9 @@ mod tests {
             ended_at: 2,
             input_tokens: 10,
             output_tokens: 5,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            total_tokens: 15,
+            cache_read_tokens: 3,
+            cache_write_tokens: 2,
+            total_tokens: 20,
             event_count: 1,
             status: "synced".to_string(),
             last_error: String::new(),
@@ -286,8 +357,11 @@ mod tests {
 
         let dashboard = build_dashboard(&sessions);
 
-        assert_eq!(dashboard.total_tokens, 15);
+        assert_eq!(dashboard.total_tokens, 20);
+        assert_eq!(dashboard.total_cache_read_tokens, 3);
+        assert_eq!(dashboard.total_cache_write_tokens, 2);
         assert_eq!(dashboard.runtimes[0].runtime, "codex-cli");
+        assert_eq!(dashboard.runtimes[0].total_tokens, 20);
         assert_eq!(dashboard.runtimes[0].session_count, 1);
     }
 }

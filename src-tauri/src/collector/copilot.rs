@@ -300,7 +300,7 @@ fn parse_line(
     let mut out = Vec::new();
     for (model_name, metric) in model_metrics {
         let usage = metric.get("usage")?;
-        let input_tokens = usage
+        let raw_input_tokens = usage
             .get("inputTokens")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
@@ -316,8 +316,15 @@ fn parse_line(
             .get("cacheWriteTokens")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
+        let input_tokens = raw_input_tokens
+            .saturating_sub(cache_read_tokens)
+            .saturating_sub(cache_write_tokens);
 
-        if input_tokens == 0 && output_tokens == 0 {
+        if input_tokens == 0
+            && output_tokens == 0
+            && cache_read_tokens == 0
+            && cache_write_tokens == 0
+        {
             continue;
         }
 
@@ -436,7 +443,7 @@ mod tests {
         assert_eq!(hb.git_branch, "main");
         assert_eq!(hb.model, "gpt-5.5");
         assert_eq!(hb.provider, "openai");
-        assert_eq!(hb.input_tokens, 1200);
+        assert_eq!(hb.input_tokens, 300);
         assert_eq!(hb.output_tokens, 110);
         assert_eq!(hb.cache_read_tokens, 900);
     }
