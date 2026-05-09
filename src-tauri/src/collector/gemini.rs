@@ -75,6 +75,7 @@ impl Collector for GeminiCollector {
                 Ok((heartbeats, new_offset)) => {
                     if !heartbeats.is_empty() {
                         sessions.push(SessionFile {
+                            runtime: self.name().to_string(),
                             path: file.clone(),
                             offset: new_offset,
                             heartbeats,
@@ -85,6 +86,32 @@ impl Collector for GeminiCollector {
             }
         }
 
+        Ok(sessions)
+    }
+
+    fn scan_all(&self, machine_id: &str) -> Result<Vec<SessionFile>, String> {
+        let root = dirs::home_dir()
+            .ok_or("cannot find home directory")?
+            .join(".gemini")
+            .join("tmp");
+
+        if !root.exists() {
+            return Ok(vec![]);
+        }
+
+        let mut sessions = Vec::new();
+        for file in find_session_files(&root) {
+            if let Ok((heartbeats, offset)) = parse_file_incremental(&file, 0, machine_id) {
+                if !heartbeats.is_empty() {
+                    sessions.push(SessionFile {
+                        runtime: self.name().to_string(),
+                        path: file,
+                        offset,
+                        heartbeats,
+                    });
+                }
+            }
+        }
         Ok(sessions)
     }
 

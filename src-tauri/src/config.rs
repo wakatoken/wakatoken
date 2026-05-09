@@ -2,10 +2,36 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub access_token: String,
+    #[serde(default = "default_enabled_runtimes")]
+    pub enabled_runtimes: Vec<String>,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            access_token: String::new(),
+            enabled_runtimes: default_enabled_runtimes(),
+        }
+    }
+}
+
+pub fn default_enabled_runtimes() -> Vec<String> {
+    vec![
+        "claude-code".to_string(),
+        "codex-cli".to_string(),
+        "copilot-agent".to_string(),
+        "gemini-cli".to_string(),
+    ]
+}
+
+impl AppConfig {
+    pub fn runtime_enabled(&self, runtime: &str) -> bool {
+        self.enabled_runtimes.iter().any(|item| item == runtime)
+    }
 }
 
 fn config_path() -> PathBuf {
@@ -43,9 +69,17 @@ mod tests {
     }
 
     #[test]
+    fn default_enabled_runtimes_are_present() {
+        let config = AppConfig::default();
+        assert!(config.runtime_enabled("claude-code"));
+        assert!(config.runtime_enabled("codex-cli"));
+    }
+
+    #[test]
     fn serializes_access_token() {
         let config = AppConfig {
             access_token: "access-token".to_string(),
+            enabled_runtimes: default_enabled_runtimes(),
         };
         let json = serde_json::to_string(&config).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -56,12 +90,14 @@ mod tests {
     fn deserializes_missing_access_token_as_empty_string() {
         let config: AppConfig = serde_json::from_str(r#"{}"#).unwrap();
         assert_eq!(config.access_token, "");
+        assert!(config.runtime_enabled("gemini-cli"));
     }
 
     #[test]
     fn round_trips_access_token_through_json() {
         let original = AppConfig {
             access_token: "round-trip-token".to_string(),
+            enabled_runtimes: vec!["codex-cli".to_string()],
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: AppConfig = serde_json::from_str(&json).unwrap();

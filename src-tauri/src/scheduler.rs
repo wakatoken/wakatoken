@@ -79,6 +79,9 @@ pub async fn run_sync(
 
     let mut all_sessions = Vec::new();
     for c in collectors {
+        if !config.runtime_enabled(c.name()) {
+            continue;
+        }
         match c.collect(&machine_id) {
             Ok(sessions) => all_sessions.extend(sessions),
             Err(e) => eprintln!("[wakatoken] collector {} error: {e}", c.name()),
@@ -133,6 +136,7 @@ pub async fn run_sync(
                 for c in collectors {
                     c.commit_file(&session.path, session.offset);
                 }
+                crate::local_stats::record_session(session, "synced", "").ok();
                 total_new += result.new_count;
                 total_dedup += result.dedup_count;
 
@@ -145,6 +149,7 @@ pub async fn run_sync(
                 }
             }
             Err(e) => {
+                crate::local_stats::record_session(session, "failed", &e).ok();
                 // Skip failed session, its offset stays uncommitted so it'll retry next sync
                 eprintln!(
                     "[wakatoken] session {} failed, skipping: {e}",

@@ -2,6 +2,7 @@
 /// Run with: cargo test --test smoke_test -- --nocapture
 
 #[test]
+#[ignore = "uploads real local sessions to the configured cloud account"]
 fn collect_and_report_smoke() {
     let collectors = wakatoken_client_lib::collector::create_collectors();
     let machine_id = wakatoken_client_lib::heartbeat::get_machine_id().expect("machine id");

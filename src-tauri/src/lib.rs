@@ -1,6 +1,7 @@
 pub mod collector;
 pub mod config;
 pub mod heartbeat;
+pub mod local_stats;
 pub mod reporter;
 mod scheduler;
 mod tray;
@@ -38,6 +39,27 @@ struct TokenResponse {
     access_token: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountInfo {
+    signed_in: bool,
+    name: String,
+    email: String,
+    image: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionResponse {
+    user: Option<SessionUser>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionUser {
+    name: Option<String>,
+    email: Option<String>,
+    image: Option<String>,
+}
+
 #[tauri::command]
 fn get_base_url() -> &'static str {
     BASE_URL
@@ -46,6 +68,88 @@ fn get_base_url() -> &'static str {
 #[tauri::command]
 fn get_config() -> AppConfig {
     AppConfig::load()
+}
+
+#[tauri::command]
+fn save_runtime_settings(enabled_runtimes: Vec<String>) -> Result<AppConfig, String> {
+    let mut config = AppConfig::load();
+    config.enabled_runtimes = enabled_runtimes;
+    config.save()?;
+    Ok(config)
+}
+
+#[tauri::command]
+fn sign_out() -> Result<AppConfig, String> {
+    let mut config = AppConfig::load();
+    config.access_token.clear();
+    config.save()?;
+    Ok(config)
+}
+
+#[tauri::command]
+async fn get_account() -> Result<AccountInfo, String> {
+    let config = AppConfig::load();
+    if config.access_token.is_empty() {
+        return Ok(signed_out_account());
+    }
+
+    let resp = reqwest::Client::new()
+        .get(format!("{BASE_URL}/api/auth/get-session"))
+        .header("Authorization", format!("Bearer {}", config.access_token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        return Ok(signed_out_account());
+    }
+
+    let session: SessionResponse = resp.json().await.map_err(|e| e.to_string())?;
+    let Some(user) = session.user else {
+        return Ok(signed_out_account());
+    };
+
+    Ok(AccountInfo {
+        signed_in: true,
+        name: user.name.unwrap_or_else(|| "Signed in".to_string()),
+        email: user.email.unwrap_or_default(),
+        image: user.image,
+    })
+}
+
+fn signed_out_account() -> AccountInfo {
+    AccountInfo {
+        signed_in: false,
+        name: String::new(),
+        email: String::new(),
+        image: None,
+    }
+}
+
+#[tauri::command]
+fn get_local_dashboard() -> Result<local_stats::LocalDashboard, String> {
+    local_stats::get_local_dashboard()
+}
+
+#[tauri::command]
+fn list_sessions(runtime: Option<String>) -> Result<Vec<local_stats::SessionSummary>, String> {
+    local_stats::list_sessions(runtime, Some(100))
+}
+
+#[tauri::command]
+fn rescan_local_stats(
+    collectors: tauri::State<'_, SharedCollectors>,
+) -> Result<local_stats::LocalDashboard, String> {
+    let machine_id = crate::heartbeat::get_machine_id()?;
+    let config = AppConfig::load();
+    let mut sessions = Vec::new();
+    for collector in collectors.iter() {
+        if !config.runtime_enabled(collector.name()) {
+            continue;
+        }
+        sessions.extend(collector.scan_all(&machine_id)?);
+    }
+    local_stats::rebuild_from_sessions(&sessions)
 }
 
 #[tauri::command]
@@ -142,9 +246,8 @@ async fn poll_device_auth(device_code: String) -> Result<bool, String> {
 
     if resp.status().is_success() {
         let data: TokenResponse = resp.json().await.map_err(|e| e.to_string())?;
-        let config = AppConfig {
-            access_token: data.access_token,
-        };
+        let mut config = AppConfig::load();
+        config.access_token = data.access_token;
         config.save()?;
         Ok(true)
     } else {
@@ -199,6 +302,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_base_url,
             get_config,
+            save_runtime_settings,
+            sign_out,
+            get_account,
+            get_local_dashboard,
+            list_sessions,
+            rescan_local_stats,
             get_sync_status,
             sync_now,
             start_device_auth,
@@ -210,6 +319,7 @@ pub fn run() {
 
             tray::create_tray(&app.handle().clone(), &status_for_tray)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            tray::show_main_window(&app.handle().clone());
             scheduler::start_periodic_sync(
                 app.handle().clone(),
                 collectors_for_scheduler,

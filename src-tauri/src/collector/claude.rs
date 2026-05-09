@@ -114,6 +114,7 @@ impl Collector for ClaudeCollector {
                 Ok((heartbeats, new_offset)) => {
                     if !heartbeats.is_empty() {
                         sessions.push(SessionFile {
+                            runtime: self.name().to_string(),
                             path: file.clone(),
                             offset: new_offset,
                             heartbeats,
@@ -124,6 +125,32 @@ impl Collector for ClaudeCollector {
             }
         }
 
+        Ok(sessions)
+    }
+
+    fn scan_all(&self, machine_id: &str) -> Result<Vec<SessionFile>, String> {
+        let claude_dir = dirs::home_dir()
+            .ok_or("cannot find home directory")?
+            .join(".claude")
+            .join("projects");
+
+        if !claude_dir.exists() {
+            return Ok(vec![]);
+        }
+
+        let mut sessions = Vec::new();
+        for file in find_jsonl_files(&claude_dir) {
+            if let Ok((heartbeats, offset)) = parse_jsonl_incremental(&file, 0, machine_id) {
+                if !heartbeats.is_empty() {
+                    sessions.push(SessionFile {
+                        runtime: self.name().to_string(),
+                        path: file,
+                        offset,
+                        heartbeats,
+                    });
+                }
+            }
+        }
         Ok(sessions)
     }
 

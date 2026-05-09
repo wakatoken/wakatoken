@@ -15,9 +15,6 @@ fn dashboard_url() -> String {
 
 /// Menu items that get updated in-place (no menu rebuild needed).
 struct TrayMenuItems {
-    today_total: MenuItem<tauri::Wry>,
-    today_input: MenuItem<tauri::Wry>,
-    today_output: MenuItem<tauri::Wry>,
     sync_status: MenuItem<tauri::Wry>,
     sync_now: MenuItem<tauri::Wry>,
 }
@@ -50,7 +47,7 @@ pub fn create_tray(app: &AppHandle, status: &SharedStatus) -> Result<(), String>
                 });
             }
             "dashboard" => open_url(app, &dashboard_url()),
-            "settings" => open_settings_window(app),
+            "show_app" => show_main_window(app),
             "quit" => std::process::exit(0),
             _ => {}
         })
@@ -68,25 +65,6 @@ pub fn update_tray(app: &AppHandle, status: &SyncStatus) -> Result<(), String> {
 
     if let Ok(guard) = MENU_ITEMS.lock() {
         if let Some(items) = guard.as_ref() {
-            let total = status.today_input_tokens + status.today_output_tokens;
-            items
-                .today_total
-                .set_text(format!("Today: {}", format_tokens(total)))
-                .ok();
-            items
-                .today_input
-                .set_text(format!(
-                    "  Input:  {}",
-                    format_tokens(status.today_input_tokens)
-                ))
-                .ok();
-            items
-                .today_output
-                .set_text(format!(
-                    "  Output: {}",
-                    format_tokens(status.today_output_tokens)
-                ))
-                .ok();
             items.sync_status.set_text(format_status_line(status)).ok();
         }
     }
@@ -120,49 +98,27 @@ fn build_menu(
     app: &AppHandle,
     status: &SyncStatus,
 ) -> Result<(tauri::menu::Menu<tauri::Wry>, TrayMenuItems), String> {
-    let total = status.today_input_tokens + status.today_output_tokens;
-
-    let today_total = mi(
-        app,
-        "today_total",
-        format!("Today: {}", format_tokens(total)),
-        false,
-    )?;
-    let today_input = mi(
-        app,
-        "today_input",
-        format!("  Input:  {}", format_tokens(status.today_input_tokens)),
-        false,
-    )?;
-    let today_output = mi(
-        app,
-        "today_output",
-        format!("  Output: {}", format_tokens(status.today_output_tokens)),
-        false,
-    )?;
     let sync_status = mi(app, "sync_status", format_status_line(status), false)?;
 
     let sync_now = mi(app, "sync_now", "Sync Now".to_string(), true)?;
 
     let menu = MenuBuilder::new(app)
-        .item(&today_total)
-        .item(&today_input)
-        .item(&today_output)
-        .item(&PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?)
+        .item(&mi(app, "show_app", "Show WakaToken".to_string(), true)?)
         .item(&sync_status)
         .item(&PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?)
         .item(&sync_now)
-        .item(&mi(app, "dashboard", "Open Dashboard".to_string(), true)?)
-        .item(&mi(app, "settings", "Settings...".to_string(), true)?)
+        .item(&mi(
+            app,
+            "dashboard",
+            "Open Cloud Dashboard".to_string(),
+            true,
+        )?)
         .item(&PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?)
         .item(&mi(app, "quit", "Quit WakaToken".to_string(), true)?)
         .build()
         .map_err(|e| e.to_string())?;
 
     let items = TrayMenuItems {
-        today_total,
-        today_input,
-        today_output,
         sync_status,
         sync_now,
     };
@@ -254,16 +210,18 @@ fn open_url(app: &AppHandle, url: &str) {
     app.opener().open_url(url, None::<&str>).ok();
 }
 
-fn open_settings_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("settings") {
+pub fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        window.show().ok();
         window.set_focus().ok();
         return;
     }
 
-    tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("index.html".into()))
-        .title("WakaToken Settings")
-        .inner_size(480.0, 420.0)
-        .resizable(false)
+    tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+        .title("WakaToken")
+        .inner_size(1120.0, 760.0)
+        .min_inner_size(940.0, 640.0)
+        .resizable(true)
         .center()
         .build()
         .ok();

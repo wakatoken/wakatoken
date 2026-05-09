@@ -82,6 +82,7 @@ mod tests {
         let client = reqwest::Client::new();
         let config = AppConfig {
             access_token: "access-token".to_string(),
+            enabled_runtimes: crate::config::default_enabled_runtimes(),
         };
         let r = rt
             .block_on(send_heartbeats(&client, &config, vec![]))

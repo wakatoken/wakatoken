@@ -86,6 +86,7 @@ impl Collector for CodexCollector {
                 Ok((heartbeats, new_offset)) => {
                     if !heartbeats.is_empty() {
                         sessions.push(SessionFile {
+                            runtime: self.name().to_string(),
                             path: file.clone(),
                             offset: new_offset,
                             heartbeats,
@@ -96,6 +97,35 @@ impl Collector for CodexCollector {
             }
         }
 
+        Ok(sessions)
+    }
+
+    fn scan_all(&self, machine_id: &str) -> Result<Vec<SessionFile>, String> {
+        let codex_home = std::env::var("CODEX_HOME")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| dirs::home_dir().map(|h| h.join(".codex")))
+            .ok_or("cannot find codex home directory")?;
+        let codex_dir = codex_home.join("sessions");
+
+        if !codex_dir.exists() {
+            return Ok(vec![]);
+        }
+
+        let mut sessions = Vec::new();
+        for file in find_jsonl_files(&codex_dir) {
+            if let Ok((heartbeats, offset)) = parse_jsonl_incremental(&file, 0, machine_id) {
+                if !heartbeats.is_empty() {
+                    sessions.push(SessionFile {
+                        runtime: self.name().to_string(),
+                        path: file,
+                        offset,
+                        heartbeats,
+                    });
+                }
+            }
+        }
         Ok(sessions)
     }
 
