@@ -34,10 +34,10 @@ Download from the [Releases page](https://github.com/wakatoken/wakatoken/release
 
 ## Setup
 
-1. Launch WakaToken - it appears as a tray icon
-2. Click the tray icon -> **Settings...**
-3. Enter your API key (get one from [wkt.tftt.cc](https://wkt.tftt.cc))
-4. Click **Test Connection** to verify, then **Save**
+1. Launch WakaToken - the main window opens and the app also appears in the system tray
+2. Click **Sign in with Browser**
+3. Complete the device login flow in your browser
+4. Choose which runtimes to monitor during onboarding or from **Settings**
 
 The app will start syncing your Claude Code, Codex CLI, GitHub Copilot, and Gemini CLI token usage automatically.
 
@@ -74,8 +74,10 @@ npm run tauri build
 src/                  # Frontend - settings window (HTML/JS/CSS)
 src-tauri/src/
   lib.rs              # App setup & Tauri commands
-  config.rs           # API key persistence (~/.config/com.wakatoken.client/)
+  config.rs           # Runtime settings and onboarding state
+  credentials.rs      # Browser login token persistence
   heartbeat.rs        # Token usage data model
+  local_stats.rs      # Local session database and dashboard queries
   collector/          # Pluggable data collectors
     claude.rs         # Claude Code session parser
     codex.rs          # Codex CLI session parser
