@@ -56,15 +56,6 @@ const runtimes = [
 async function loadConfig() {
   appConfig = await invoke("get_config");
   renderRuntimeControls();
-  if (appConfig.access_token) {
-    deviceAuthBtn.textContent = "Sign out";
-    deviceAuthResult.textContent = "Signed in";
-    deviceAuthResult.className = "test-result success";
-  } else {
-    deviceAuthBtn.textContent = "Sign in with Browser";
-    deviceAuthResult.textContent = "";
-    deviceAuthResult.className = "test-result";
-  }
 }
 
 async function loadAccount() {
@@ -190,6 +181,9 @@ function renderSessions(sessions) {
 
 function renderAccount() {
   if (!account.signedIn) {
+    deviceAuthBtn.textContent = "Sign in with Browser";
+    deviceAuthResult.textContent = "";
+    deviceAuthResult.className = "test-result";
     accountArea.innerHTML = `<button class="login-inline" type="button">Sign in</button>`;
     modalAccount.innerHTML = `<p class="account-muted">Not signed in.</p>`;
     accountArea.querySelector(".login-inline").addEventListener("click", openSettings);
@@ -199,6 +193,9 @@ function renderAccount() {
   const avatar = account.image
     ? `<img src="${escapeHtml(account.image)}" alt="">`
     : `<span>${escapeHtml(accountInitial(account.name || account.email))}</span>`;
+  deviceAuthBtn.textContent = "Sign out";
+  deviceAuthResult.textContent = "Signed in";
+  deviceAuthResult.className = "test-result success";
   accountArea.innerHTML = `
     <div class="avatar">${avatar}</div>
     <div class="account-copy">

@@ -4,6 +4,7 @@ pub mod copilot;
 pub mod gemini;
 
 use crate::heartbeat::Heartbeat;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// One session file's parse result.
@@ -27,6 +28,14 @@ pub trait Collector: Send + Sync {
         let sessions = self.scan_all(machine_id)?;
         progress(1, 1);
         Ok(sessions)
+    }
+    fn scan_since(
+        &self,
+        machine_id: &str,
+        offsets: &HashMap<PathBuf, u64>,
+    ) -> Result<Vec<SessionFile>, String> {
+        let _ = offsets;
+        self.scan_all(machine_id)
     }
     /// Commit offset for a single file after its heartbeats are uploaded.
     fn commit_file(&self, path: &Path, offset: u64);

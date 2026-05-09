@@ -1,5 +1,6 @@
 pub mod collector;
 pub mod config;
+pub mod credentials;
 pub mod heartbeat;
 pub mod local_stats;
 pub mod reporter;
@@ -7,6 +8,7 @@ mod scheduler;
 mod tray;
 
 use config::AppConfig;
+use credentials::AuthCredentials;
 use scheduler::SyncStatus;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -103,22 +105,23 @@ fn complete_onboarding(enabled_runtimes: Vec<String>) -> Result<AppConfig, Strin
 
 #[tauri::command]
 fn sign_out() -> Result<AppConfig, String> {
-    let mut config = AppConfig::load();
-    config.access_token.clear();
-    config.save()?;
-    Ok(config)
+    AuthCredentials::clear()?;
+    Ok(AppConfig::load())
 }
 
 #[tauri::command]
 async fn get_account() -> Result<AccountInfo, String> {
-    let config = AppConfig::load();
-    if config.access_token.is_empty() {
+    let credentials = AuthCredentials::load();
+    if !credentials.signed_in() {
         return Ok(signed_out_account());
     }
 
     let resp = reqwest::Client::new()
         .get(format!("{BASE_URL}/api/auth/get-session"))
-        .header("Authorization", format!("Bearer {}", config.access_token))
+        .header(
+            "Authorization",
+            format!("Bearer {}", credentials.access_token),
+        )
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -481,9 +484,10 @@ async fn poll_device_auth(device_code: String) -> Result<bool, String> {
 
     if resp.status().is_success() {
         let data: TokenResponse = resp.json().await.map_err(|e| e.to_string())?;
-        let mut config = AppConfig::load();
-        config.access_token = data.access_token;
-        config.save()?;
+        AuthCredentials {
+            access_token: data.access_token,
+        }
+        .save()?;
         Ok(true)
     } else {
         Ok(false)

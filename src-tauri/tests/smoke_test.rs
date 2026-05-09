@@ -25,8 +25,8 @@ fn collect_and_report_smoke() {
         return;
     }
 
-    let config = wakatoken_client_lib::config::AppConfig::load();
-    if config.access_token.is_empty() {
+    let credentials = wakatoken_client_lib::credentials::AuthCredentials::load();
+    if !credentials.signed_in() {
         eprintln!("SKIP upload: no authentication configured.");
         return;
     }
@@ -43,7 +43,7 @@ fn collect_and_report_smoke() {
         );
         let result = rt.block_on(wakatoken_client_lib::reporter::send_heartbeats(
             &client,
-            &config,
+            &credentials.access_token,
             session.heartbeats.clone(),
         ));
         match result {

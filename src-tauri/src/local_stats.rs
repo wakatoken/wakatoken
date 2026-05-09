@@ -1,10 +1,15 @@
 use crate::collector::SessionFile;
+use crate::heartbeat::Heartbeat;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
-const STORE_VERSION: u32 = 2;
+const DB_FILE: &str = "wakatoken.db";
+const STATUS_LOCAL: &str = "local";
+const STATUS_UPLOADED: &str = "uploaded";
+const STATUS_FAILED: &str = "failed";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -57,136 +62,300 @@ pub struct SessionSummary {
     pub last_error: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct LocalStatsStore {
-    #[serde(default)]
-    version: u32,
-    sessions: Vec<SessionSummary>,
+#[derive(Debug, Clone)]
+pub struct PendingHeartbeat {
+    pub event_id: String,
+    pub heartbeat: Heartbeat,
 }
 
 pub fn get_local_dashboard() -> Result<LocalDashboard, String> {
-    let store = load_store()?;
-    Ok(build_dashboard(&store.sessions))
+    let conn = open_db()?;
+    let sessions = query_sessions(&conn, None, None)?;
+    Ok(build_dashboard(&sessions))
 }
 
 pub fn has_store() -> Result<bool, String> {
-    Ok(stats_path()?.exists())
+    if !db_path()?.exists() {
+        return Ok(false);
+    }
+    let conn = open_db()?;
+    has_events(&conn)
 }
 
 pub fn list_sessions(
     runtime: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<SessionSummary>, String> {
-    let mut sessions = load_store()?.sessions;
-    if let Some(runtime) = runtime.filter(|value| !value.is_empty() && value != "all") {
-        sessions.retain(|session| session.runtime == runtime);
-    }
-    sessions.sort_by(|a, b| b.ended_at.cmp(&a.ended_at));
-    sessions.truncate(limit.unwrap_or(50));
-    Ok(sessions)
-}
-
-pub fn record_session(session: &SessionFile, status: &str, last_error: &str) -> Result<(), String> {
-    let mut store = load_store()?;
-    let summary = summarize_session(session, status, last_error);
-    store.sessions.retain(|item| item.id != summary.id);
-    store.sessions.push(summary);
-    save_store(&store)
-}
-
-pub fn rebuild_from_sessions(sessions: &[SessionFile]) -> Result<LocalDashboard, String> {
-    let previous = load_store()?;
-    let store = LocalStatsStore {
-        version: STORE_VERSION,
-        sessions: summarize_sessions_preserving_status(sessions, &previous.sessions),
-    };
-    save_store(&store)?;
-    Ok(build_dashboard(&store.sessions))
+    let conn = open_db()?;
+    query_sessions(&conn, runtime, limit)
 }
 
 pub fn replace_runtime_sessions(
     runtimes: &[String],
     sessions: &[SessionFile],
 ) -> Result<LocalDashboard, String> {
-    let previous = load_store()?;
-    let mut summaries: Vec<SessionSummary> = previous
-        .sessions
-        .iter()
-        .filter(|session| !runtimes.contains(&session.runtime))
-        .cloned()
-        .collect();
-    summaries.extend(summarize_sessions_preserving_status(
-        sessions,
-        &previous.sessions,
-    ));
+    let mut conn = open_db()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
 
-    let store = LocalStatsStore {
-        version: STORE_VERSION,
-        sessions: summaries,
-    };
-    save_store(&store)?;
-    Ok(build_dashboard(&store.sessions))
-}
+    let mut seen = HashSet::new();
+    for session in sessions {
+        update_file_state(&tx, session)?;
+        for heartbeat in &session.heartbeats {
+            seen.insert(heartbeat.event_id.clone());
+            upsert_event(&tx, session, heartbeat)?;
+        }
+    }
 
-fn summarize_sessions_preserving_status(
-    sessions: &[SessionFile],
-    previous: &[SessionSummary],
-) -> Vec<SessionSummary> {
-    let previous_status: BTreeMap<String, (String, String)> = previous
-        .iter()
-        .map(|session| {
-            (
-                session.id.clone(),
-                (session.status.clone(), session.last_error.clone()),
-            )
-        })
-        .collect();
+    for runtime in runtimes {
+        let mut stmt = tx
+            .prepare("SELECT event_id FROM events WHERE runtime = ?1")
+            .map_err(|e| e.to_string())?;
+        let event_ids = stmt
+            .query_map(params![runtime], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        drop(stmt);
 
-    sessions
-        .iter()
-        .map(|session| {
-            let mut summary = summarize_session(session, "local", "");
-            if let Some((status, last_error)) = previous_status.get(&summary.id) {
-                summary.status = status.clone();
-                summary.last_error = last_error.clone();
+        for event_id in event_ids {
+            if !seen.contains(&event_id) {
+                tx.execute("DELETE FROM events WHERE event_id = ?1", params![event_id])
+                    .map_err(|e| e.to_string())?;
             }
-            summary
-        })
-        .collect()
+        }
+    }
+
+    tx.commit().map_err(|e| e.to_string())?;
+    get_local_dashboard()
 }
 
-fn summarize_session(session: &SessionFile, status: &str, last_error: &str) -> SessionSummary {
-    let first = session.heartbeats.first();
-    let started_at = session
-        .heartbeats
-        .iter()
-        .map(|heartbeat| heartbeat.event_ts)
-        .min()
-        .unwrap_or(0);
-    let ended_at = session
-        .heartbeats
-        .iter()
-        .map(|heartbeat| heartbeat.event_ts)
-        .max()
-        .unwrap_or(0);
-    let input_tokens = session.heartbeats.iter().map(|h| h.input_tokens).sum();
-    let output_tokens = session.heartbeats.iter().map(|h| h.output_tokens).sum();
-    let cache_read_tokens = session.heartbeats.iter().map(|h| h.cache_read_tokens).sum();
-    let cache_write_tokens = session
-        .heartbeats
-        .iter()
-        .map(|h| h.cache_write_tokens)
-        .sum();
+pub fn upsert_sessions(sessions: &[SessionFile]) -> Result<(), String> {
+    let mut conn = open_db()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    for session in sessions {
+        update_file_state(&tx, session)?;
+        for heartbeat in &session.heartbeats {
+            upsert_event(&tx, session, heartbeat)?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
 
-    SessionSummary {
-        id: session.path.display().to_string(),
-        path: session.path.display().to_string(),
-        runtime: session.runtime.clone(),
-        project: first.map(|h| h.project.clone()).unwrap_or_default(),
-        model: first.map(|h| h.model.clone()).unwrap_or_default(),
-        started_at,
-        ended_at,
+pub fn file_offsets(runtime: &str) -> Result<HashMap<PathBuf, u64>, String> {
+    let conn = open_db()?;
+    let mut stmt = conn
+        .prepare("SELECT path, offset FROM file_scan_state WHERE runtime = ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![runtime], |row| {
+            Ok((
+                PathBuf::from(row.get::<_, String>(0)?),
+                row.get::<_, i64>(1)? as u64,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    rows.collect::<Result<HashMap<_, _>, _>>()
+        .map_err(|e| e.to_string())
+}
+
+pub fn pending_heartbeats(limit: usize) -> Result<Vec<PendingHeartbeat>, String> {
+    let conn = open_db()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT event_id, project, provider, model, runtime, os, machine_id, git_branch, language, tool,
+                    input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, event_ts
+             FROM events
+             WHERE upload_status != ?1
+             ORDER BY event_ts ASC
+             LIMIT ?2",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map(params![STATUS_UPLOADED, limit as i64], |row| {
+            let event_id: String = row.get(0)?;
+            Ok(PendingHeartbeat {
+                event_id: event_id.clone(),
+                heartbeat: Heartbeat {
+                    event_id,
+                    project: row.get(1)?,
+                    provider: row.get(2)?,
+                    model: row.get(3)?,
+                    source: row.get(4)?,
+                    os: row.get(5)?,
+                    machine_id: row.get(6)?,
+                    git_branch: row.get(7)?,
+                    language: row.get(8)?,
+                    tool: row.get(9)?,
+                    input_tokens: row.get::<_, i64>(10)? as u64,
+                    output_tokens: row.get::<_, i64>(11)? as u64,
+                    cache_read_tokens: row.get::<_, i64>(12)? as u64,
+                    cache_write_tokens: row.get::<_, i64>(13)? as u64,
+                    event_ts: row.get(14)?,
+                },
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
+
+pub fn mark_uploaded(event_ids: &[String]) -> Result<(), String> {
+    update_status(event_ids, STATUS_UPLOADED, "")
+}
+
+pub fn mark_failed(event_ids: &[String], error: &str) -> Result<(), String> {
+    update_status(event_ids, STATUS_FAILED, error)
+}
+
+fn update_status(event_ids: &[String], status: &str, last_error: &str) -> Result<(), String> {
+    if event_ids.is_empty() {
+        return Ok(());
+    }
+    let mut conn = open_db()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now().timestamp_millis();
+    for event_id in event_ids {
+        tx.execute(
+            "UPDATE events
+             SET upload_status = ?1, last_error = ?2, uploaded_at = CASE WHEN ?1 = ?3 THEN ?4 ELSE uploaded_at END
+             WHERE event_id = ?5",
+            params![status, last_error, STATUS_UPLOADED, now, event_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
+
+fn upsert_event(
+    conn: &Connection,
+    session: &SessionFile,
+    heartbeat: &Heartbeat,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO events (
+            event_id, session_path, runtime, project, provider, model, os, machine_id, git_branch,
+            language, tool, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+            event_ts, upload_status, last_error, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, '', ?18, ?18)
+        ON CONFLICT(event_id) DO UPDATE SET
+            session_path = excluded.session_path,
+            runtime = excluded.runtime,
+            project = excluded.project,
+            provider = excluded.provider,
+            model = excluded.model,
+            os = excluded.os,
+            machine_id = excluded.machine_id,
+            git_branch = excluded.git_branch,
+            language = excluded.language,
+            tool = excluded.tool,
+            input_tokens = excluded.input_tokens,
+            output_tokens = excluded.output_tokens,
+            cache_read_tokens = excluded.cache_read_tokens,
+            cache_write_tokens = excluded.cache_write_tokens,
+            event_ts = excluded.event_ts,
+            updated_at = excluded.updated_at",
+        params![
+            heartbeat.event_id,
+            session.path.display().to_string(),
+            session.runtime,
+            heartbeat.project,
+            heartbeat.provider,
+            heartbeat.model,
+            heartbeat.os,
+            heartbeat.machine_id,
+            heartbeat.git_branch,
+            heartbeat.language,
+            heartbeat.tool,
+            heartbeat.input_tokens as i64,
+            heartbeat.output_tokens as i64,
+            heartbeat.cache_read_tokens as i64,
+            heartbeat.cache_write_tokens as i64,
+            heartbeat.event_ts,
+            STATUS_LOCAL,
+            chrono::Utc::now().timestamp_millis(),
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn update_file_state(conn: &Connection, session: &SessionFile) -> Result<(), String> {
+    let now = chrono::Utc::now().timestamp_millis();
+    conn.execute(
+        "INSERT INTO file_scan_state (runtime, path, offset, updated_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(runtime, path) DO UPDATE SET
+            offset = excluded.offset,
+            updated_at = excluded.updated_at",
+        params![
+            session.runtime,
+            session.path.display().to_string(),
+            session.offset as i64,
+            now,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn query_sessions(
+    conn: &Connection,
+    runtime: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<SessionSummary>, String> {
+    let mut sql = String::from(
+        "SELECT session_path, runtime,
+                MIN(event_ts), MAX(event_ts),
+                SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), SUM(cache_write_tokens),
+                COUNT(*),
+                COALESCE((SELECT project FROM events e2 WHERE e2.session_path = events.session_path ORDER BY event_ts ASC LIMIT 1), ''),
+                COALESCE((SELECT model FROM events e2 WHERE e2.session_path = events.session_path ORDER BY event_ts ASC LIMIT 1), ''),
+                CASE
+                    WHEN SUM(CASE WHEN upload_status = 'failed' THEN 1 ELSE 0 END) > 0 THEN 'failed'
+                    WHEN SUM(CASE WHEN upload_status != 'uploaded' THEN 1 ELSE 0 END) = 0 THEN 'synced'
+                    ELSE 'local'
+                END,
+                COALESCE(MAX(NULLIF(last_error, '')), '')
+         FROM events",
+    );
+
+    let mut params_vec: Vec<String> = Vec::new();
+    if let Some(runtime) = runtime.filter(|value| !value.is_empty() && value != "all") {
+        sql.push_str(" WHERE runtime = ?1");
+        params_vec.push(runtime);
+    }
+    sql.push_str(" GROUP BY session_path, runtime ORDER BY MAX(event_ts) DESC");
+    if limit.is_some() {
+        sql.push_str(&format!(" LIMIT {}", limit.unwrap()));
+    }
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = if params_vec.is_empty() {
+        stmt.query_map([], session_from_row)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+    } else {
+        stmt.query_map(params![params_vec[0].clone()], session_from_row)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+    };
+    rows.map_err(|e| e.to_string())
+}
+
+fn session_from_row(row: &rusqlite::Row) -> rusqlite::Result<SessionSummary> {
+    let input_tokens = row.get::<_, i64>(4)? as u64;
+    let output_tokens = row.get::<_, i64>(5)? as u64;
+    let cache_read_tokens = row.get::<_, i64>(6)? as u64;
+    let cache_write_tokens = row.get::<_, i64>(7)? as u64;
+    Ok(SessionSummary {
+        id: row.get(0)?,
+        path: row.get(0)?,
+        runtime: row.get(1)?,
+        started_at: row.get(2)?,
+        ended_at: row.get(3)?,
         input_tokens,
         output_tokens,
         cache_read_tokens,
@@ -197,10 +366,12 @@ fn summarize_session(session: &SessionFile, status: &str, last_error: &str) -> S
             cache_read_tokens,
             cache_write_tokens,
         ),
-        event_count: session.heartbeats.len() as u64,
-        status: status.to_string(),
-        last_error: last_error.to_string(),
-    }
+        event_count: row.get::<_, i64>(8)? as u64,
+        project: row.get(9)?,
+        model: row.get(10)?,
+        status: row.get(11)?,
+        last_error: row.get(12)?,
+    })
 }
 
 fn build_dashboard(sessions: &[SessionSummary]) -> LocalDashboard {
@@ -277,73 +448,70 @@ fn today_start_millis() -> i64 {
         .timestamp_millis()
 }
 
-fn load_store() -> Result<LocalStatsStore, String> {
-    let path = stats_path()?;
-    if !path.exists() {
-        return Ok(LocalStatsStore::default());
-    }
-    let data = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let mut store: LocalStatsStore = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-    if store.version < STORE_VERSION {
-        normalize_legacy_sessions(&mut store.sessions);
-        store.version = STORE_VERSION;
-        save_store(&store)?;
-        return Ok(store);
-    }
-    refresh_session_totals(&mut store.sessions);
-    Ok(store)
+fn open_db() -> Result<Connection, String> {
+    let path = db_path()?;
+    let conn = Connection::open(path).map_err(|e| e.to_string())?;
+    migrate(&conn)?;
+    Ok(conn)
 }
 
-fn normalize_legacy_sessions(sessions: &mut [SessionSummary]) {
-    for session in sessions {
-        if input_includes_cache(&session.runtime) {
-            session.input_tokens = session
-                .input_tokens
-                .saturating_sub(session.cache_read_tokens)
-                .saturating_sub(session.cache_write_tokens);
-        }
-        session.total_tokens = token_total(
-            session.input_tokens,
-            session.output_tokens,
-            session.cache_read_tokens,
-            session.cache_write_tokens,
+fn migrate(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS events (
+            event_id TEXT PRIMARY KEY,
+            session_path TEXT NOT NULL,
+            runtime TEXT NOT NULL,
+            project TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            os TEXT NOT NULL,
+            machine_id TEXT NOT NULL,
+            git_branch TEXT NOT NULL,
+            language TEXT NOT NULL,
+            tool TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            cache_read_tokens INTEGER NOT NULL,
+            cache_write_tokens INTEGER NOT NULL,
+            event_ts INTEGER NOT NULL,
+            upload_status TEXT NOT NULL,
+            last_error TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            uploaded_at INTEGER
         );
-    }
+        CREATE INDEX IF NOT EXISTS idx_events_runtime ON events(runtime);
+        CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_path);
+        CREATE INDEX IF NOT EXISTS idx_events_upload ON events(upload_status, event_ts);
+        CREATE TABLE IF NOT EXISTS file_scan_state (
+            runtime TEXT NOT NULL,
+            path TEXT NOT NULL,
+            offset INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (runtime, path)
+        );",
+    )
+    .map_err(|e| e.to_string())
 }
 
-fn refresh_session_totals(sessions: &mut [SessionSummary]) {
-    for session in sessions {
-        session.total_tokens = token_total(
-            session.input_tokens,
-            session.output_tokens,
-            session.cache_read_tokens,
-            session.cache_write_tokens,
-        );
-    }
+fn has_events(conn: &Connection) -> Result<bool, String> {
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    Ok(count > 0)
 }
 
-fn input_includes_cache(runtime: &str) -> bool {
-    matches!(runtime, "codex-cli" | "gemini-cli" | "copilot-agent")
-}
-
-fn save_store(store: &LocalStatsStore) -> Result<(), String> {
-    let path = stats_path()?;
-    let data = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
-    fs::write(path, data).map_err(|e| e.to_string())
-}
-
-fn stats_path() -> Result<PathBuf, String> {
+fn db_path() -> Result<PathBuf, String> {
     let dir = dirs::config_dir()
         .ok_or("cannot find config directory")?
         .join("com.wakatoken.client");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir.join("local-stats.json"))
+    Ok(dir.join(DB_FILE))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::heartbeat::Heartbeat;
 
     fn heartbeat(event_id: &str, runtime: &str, input: u64, output: u64) -> Heartbeat {
         Heartbeat {
@@ -366,26 +534,8 @@ mod tests {
     }
 
     #[test]
-    fn summarizes_session_tokens() {
-        let session = SessionFile {
-            runtime: "claude-code".to_string(),
-            path: PathBuf::from("/tmp/session.jsonl"),
-            offset: 10,
-            heartbeats: vec![
-                heartbeat("e1", "claude-code", 10, 3),
-                heartbeat("e2", "claude-code", 7, 2),
-            ],
-        };
-
-        let summary = summarize_session(&session, "synced", "");
-
-        assert_eq!(summary.runtime, "claude-code");
-        assert_eq!(summary.input_tokens, 17);
-        assert_eq!(summary.output_tokens, 5);
-        assert_eq!(summary.cache_read_tokens, 2);
-        assert_eq!(summary.cache_write_tokens, 4);
-        assert_eq!(summary.total_tokens, 28);
-        assert_eq!(summary.event_count, 2);
+    fn token_total_counts_cache_tokens() {
+        assert_eq!(token_total(10, 5, 3, 2), 20);
     }
 
     #[test]
@@ -404,7 +554,7 @@ mod tests {
             cache_write_tokens: 2,
             total_tokens: 20,
             event_count: 1,
-            status: "synced".to_string(),
+            status: "local".to_string(),
             last_error: String::new(),
         }];
 
@@ -419,99 +569,65 @@ mod tests {
     }
 
     #[test]
-    fn rebuild_preserves_existing_sync_status() {
+    fn upsert_preserves_uploaded_status() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
         let session = SessionFile {
             runtime: "claude-code".to_string(),
             path: PathBuf::from("/tmp/session.jsonl"),
             offset: 10,
             heartbeats: vec![heartbeat("e1", "claude-code", 10, 3)],
         };
-        let previous = vec![SessionSummary {
-            id: "/tmp/session.jsonl".to_string(),
-            path: "/tmp/session.jsonl".to_string(),
-            runtime: "claude-code".to_string(),
-            project: "old".to_string(),
-            model: "old".to_string(),
-            started_at: 1,
-            ended_at: 2,
-            input_tokens: 1,
-            output_tokens: 1,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            total_tokens: 2,
-            event_count: 1,
-            status: "synced".to_string(),
-            last_error: String::new(),
-        }];
+        upsert_event(&conn, &session, &session.heartbeats[0]).unwrap();
+        update_status_on_conn(&conn, &["e1".to_string()], STATUS_UPLOADED, "").unwrap();
+        upsert_event(&conn, &session, &session.heartbeats[0]).unwrap();
 
-        let summaries = summarize_sessions_preserving_status(&[session], &previous);
-
-        assert_eq!(summaries[0].status, "synced");
-        assert_eq!(summaries[0].input_tokens, 10);
-        assert_eq!(summaries[0].output_tokens, 3);
+        let status: String = conn
+            .query_row(
+                "SELECT upload_status FROM events WHERE event_id = 'e1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, STATUS_UPLOADED);
     }
 
     #[test]
-    fn replace_runtime_keeps_other_runtime_sessions() {
-        let previous = vec![
-            SessionSummary {
-                id: "/tmp/claude.jsonl".to_string(),
-                path: "/tmp/claude.jsonl".to_string(),
-                runtime: "claude-code".to_string(),
-                project: "old".to_string(),
-                model: "old".to_string(),
-                started_at: 1,
-                ended_at: 2,
-                input_tokens: 1,
-                output_tokens: 1,
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
-                total_tokens: 2,
-                event_count: 1,
-                status: "synced".to_string(),
-                last_error: String::new(),
-            },
-            SessionSummary {
-                id: "/tmp/codex.jsonl".to_string(),
-                path: "/tmp/codex.jsonl".to_string(),
-                runtime: "codex-cli".to_string(),
-                project: "codex".to_string(),
-                model: "model".to_string(),
-                started_at: 1,
-                ended_at: 2,
-                input_tokens: 4,
-                output_tokens: 2,
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
-                total_tokens: 6,
-                event_count: 1,
-                status: "synced".to_string(),
-                last_error: String::new(),
-            },
-        ];
-        let replacement = vec![SessionFile {
+    fn empty_database_is_not_a_local_store() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        assert!(!has_events(&conn).unwrap());
+    }
+
+    #[test]
+    fn database_with_events_is_a_local_store() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let session = SessionFile {
             runtime: "claude-code".to_string(),
-            path: PathBuf::from("/tmp/claude-new.jsonl"),
+            path: PathBuf::from("/tmp/session.jsonl"),
             offset: 10,
             heartbeats: vec![heartbeat("e1", "claude-code", 10, 3)],
-        }];
+        };
+        upsert_event(&conn, &session, &session.heartbeats[0]).unwrap();
 
-        let mut summaries: Vec<SessionSummary> = previous
-            .iter()
-            .filter(|session| session.runtime != "claude-code")
-            .cloned()
-            .collect();
-        summaries.extend(summarize_sessions_preserving_status(
-            &replacement,
-            &previous,
-        ));
+        assert!(has_events(&conn).unwrap());
+    }
 
-        assert_eq!(summaries.len(), 2);
-        assert!(summaries
-            .iter()
-            .any(|session| session.id == "/tmp/codex.jsonl"));
-        assert!(summaries
-            .iter()
-            .any(|session| session.id == "/tmp/claude-new.jsonl"));
+    fn update_status_on_conn(
+        conn: &Connection,
+        event_ids: &[String],
+        status: &str,
+        last_error: &str,
+    ) -> Result<(), String> {
+        for event_id in event_ids {
+            conn.execute(
+                "UPDATE events SET upload_status = ?1, last_error = ?2 WHERE event_id = ?3",
+                params![status, last_error, event_id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 }

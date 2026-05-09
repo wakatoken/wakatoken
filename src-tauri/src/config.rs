@@ -4,8 +4,6 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    #[serde(default)]
-    pub access_token: String,
     #[serde(default = "default_enabled_runtimes")]
     pub enabled_runtimes: Vec<String>,
     #[serde(default)]
@@ -15,7 +13,6 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            access_token: String::new(),
             enabled_runtimes: default_enabled_runtimes(),
             onboarding_completed: false,
         }
@@ -66,12 +63,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_access_token_is_empty() {
-        let config = AppConfig::default();
-        assert_eq!(config.access_token, "");
-    }
-
-    #[test]
     fn default_enabled_runtimes_are_present() {
         let config = AppConfig::default();
         assert!(config.runtime_enabled("claude-code"));
@@ -79,34 +70,32 @@ mod tests {
     }
 
     #[test]
-    fn serializes_access_token() {
+    fn serializes_runtime_settings_without_credentials() {
         let config = AppConfig {
-            access_token: "access-token".to_string(),
             enabled_runtimes: default_enabled_runtimes(),
             onboarding_completed: false,
         };
         let json = serde_json::to_string(&config).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["access_token"].as_str().unwrap(), "access-token");
+        assert!(v.get("access_token").is_none());
     }
 
     #[test]
-    fn deserializes_missing_access_token_as_empty_string() {
+    fn deserializes_missing_runtime_settings_as_defaults() {
         let config: AppConfig = serde_json::from_str(r#"{}"#).unwrap();
-        assert_eq!(config.access_token, "");
         assert!(config.runtime_enabled("gemini-cli"));
     }
 
     #[test]
-    fn round_trips_access_token_through_json() {
+    fn round_trips_runtime_settings_through_json() {
         let original = AppConfig {
-            access_token: "round-trip-token".to_string(),
             enabled_runtimes: vec!["codex-cli".to_string()],
             onboarding_completed: true,
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: AppConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.access_token, original.access_token);
+        assert_eq!(restored.enabled_runtimes, original.enabled_runtimes);
+        assert_eq!(restored.onboarding_completed, original.onboarding_completed);
     }
 
     #[test]

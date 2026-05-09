@@ -126,6 +126,38 @@ impl Collector for GeminiCollector {
         Ok(sessions)
     }
 
+    fn scan_since(
+        &self,
+        machine_id: &str,
+        offsets: &HashMap<PathBuf, u64>,
+    ) -> Result<Vec<SessionFile>, String> {
+        let root = dirs::home_dir()
+            .ok_or("cannot find home directory")?
+            .join(".gemini")
+            .join("tmp");
+
+        if !root.exists() {
+            return Ok(vec![]);
+        }
+
+        let mut sessions = Vec::new();
+        for file in find_session_files(&root) {
+            let prev_offset = offsets.get(&file).copied().unwrap_or(0);
+            if let Ok((heartbeats, offset)) = parse_file_incremental(&file, prev_offset, machine_id)
+            {
+                if !heartbeats.is_empty() {
+                    sessions.push(SessionFile {
+                        runtime: self.name().to_string(),
+                        path: file,
+                        offset,
+                        heartbeats,
+                    });
+                }
+            }
+        }
+        Ok(sessions)
+    }
+
     fn commit_file(&self, path: &Path, offset: u64) {
         let mut offsets = self.offsets.lock().unwrap();
         offsets.insert(path.to_path_buf(), offset);

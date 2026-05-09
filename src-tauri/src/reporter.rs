@@ -1,4 +1,3 @@
-use crate::config::AppConfig;
 use crate::heartbeat::Heartbeat;
 use crate::BASE_URL;
 
@@ -11,7 +10,7 @@ pub struct ReportResult {
 
 pub async fn send_heartbeats(
     client: &reqwest::Client,
-    config: &AppConfig,
+    access_token: &str,
     heartbeats: Vec<Heartbeat>,
 ) -> Result<ReportResult, String> {
     let url = format!("{BASE_URL}/api/v1/heartbeat/batch");
@@ -22,7 +21,7 @@ pub async fn send_heartbeats(
         let resp = client
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", config.access_token))
+            .header("Authorization", format!("Bearer {access_token}"))
             .json(&chunk)
             .send()
             .await
@@ -80,13 +79,8 @@ mod tests {
     fn empty_list_returns_zero() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let client = reqwest::Client::new();
-        let config = AppConfig {
-            access_token: "access-token".to_string(),
-            enabled_runtimes: crate::config::default_enabled_runtimes(),
-            onboarding_completed: false,
-        };
         let r = rt
-            .block_on(send_heartbeats(&client, &config, vec![]))
+            .block_on(send_heartbeats(&client, "access-token", vec![]))
             .unwrap();
         assert_eq!(r.new_count, 0);
         assert_eq!(r.dedup_count, 0);

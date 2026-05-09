@@ -1,5 +1,6 @@
 use crate::collector::{self, Collector};
 use crate::config::AppConfig;
+use crate::credentials::AuthCredentials;
 use crate::reporter;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -57,7 +58,8 @@ pub async fn run_sync(
     status: &SharedStatus,
 ) {
     let config = AppConfig::load();
-    if config.access_token.is_empty() {
+    let credentials = AuthCredentials::load();
+    if !credentials.signed_in() {
         let mut s = status.lock().await;
         s.last_sync_ok = false;
         s.last_error = "Authentication not configured".to_string();
@@ -73,26 +75,42 @@ pub async fn run_sync(
         }
     };
 
-    // 1. Scan all session files
+    // 1. Refresh local event store from enabled runtimes.
     emit_progress(app, "Scanning...");
     eprintln!("[wakatoken] scanning...");
 
-    let mut all_sessions = Vec::new();
     for c in collectors {
         if !config.runtime_enabled(c.name()) {
             continue;
         }
-        match c.collect(&machine_id) {
-            Ok(sessions) => all_sessions.extend(sessions),
+        let offsets = match crate::local_stats::file_offsets(c.name()) {
+            Ok(offsets) => offsets,
+            Err(e) => {
+                eprintln!("[wakatoken] file offsets {} error: {e}", c.name());
+                Default::default()
+            }
+        };
+        match c.scan_since(&machine_id, &offsets) {
+            Ok(sessions) => {
+                if let Err(e) = crate::local_stats::upsert_sessions(&sessions) {
+                    eprintln!("[wakatoken] local store {} error: {e}", c.name());
+                }
+            }
             Err(e) => eprintln!("[wakatoken] collector {} error: {e}", c.name()),
         }
     }
 
-    let file_count = all_sessions.len();
-    let msg_count: usize = all_sessions.iter().map(|s| s.heartbeats.len()).sum();
-    eprintln!("[wakatoken] found {file_count} sessions, {msg_count} messages");
+    let mut pending = match crate::local_stats::pending_heartbeats(100) {
+        Ok(items) => items,
+        Err(e) => {
+            let mut s = status.lock().await;
+            s.last_sync_ok = false;
+            s.last_error = e;
+            return;
+        }
+    };
 
-    if all_sessions.is_empty() {
+    if pending.is_empty() {
         eprintln!("[wakatoken] nothing to upload");
         emit_progress(app, "No new data");
         let mut s = status.lock().await;
@@ -104,12 +122,9 @@ pub async fn run_sync(
     }
 
     crate::tray::set_syncing(true);
-    emit_progress(
-        app,
-        &format!("Uploading {file_count} sessions ({msg_count} msgs)..."),
-    );
+    emit_progress(app, "Uploading pending events...");
 
-    // 2. Upload per-session, commit offset after each succeeds
+    // 2. Upload pending local events, then mark their upload state.
     let client = reqwest::Client::new();
     let today_start = today_start_millis();
     let mut total_new = 0u64;
@@ -117,31 +132,33 @@ pub async fn run_sync(
     let mut batch_today_input = 0u64;
     let mut batch_today_output = 0u64;
     let start = std::time::Instant::now();
+    let mut batch_index = 0usize;
 
-    for (i, session) in all_sessions.iter().enumerate() {
-        let eta = if i > 0 {
-            let per_session = start.elapsed().as_secs_f64() / i as f64;
-            let remaining = (file_count - i) as f64 * per_session;
+    while !pending.is_empty() {
+        batch_index += 1;
+        let eta = if batch_index > 1 {
+            let per_batch = start.elapsed().as_secs_f64() / (batch_index - 1) as f64;
+            let remaining = pending.len() as f64 / 100.0 * per_batch;
             format_eta(remaining.ceil() as u64)
         } else {
             String::new()
         };
-        let progress = format!("Uploading session {}/{file_count}{eta}", i + 1);
+        let progress = format!("Uploading batch {batch_index}{eta}");
         emit_progress(app, &progress);
         eprintln!("[wakatoken] {progress}");
 
-        match reporter::send_heartbeats(&client, &config, session.heartbeats.clone()).await {
+        let event_ids: Vec<String> = pending.iter().map(|item| item.event_id.clone()).collect();
+        let heartbeats: Vec<_> = pending.iter().map(|item| item.heartbeat.clone()).collect();
+
+        match reporter::send_heartbeats(&client, &credentials.access_token, heartbeats.clone())
+            .await
+        {
             Ok(result) => {
-                // Find which collector owns this file and commit its offset
-                for c in collectors {
-                    c.commit_file(&session.path, session.offset);
-                }
-                crate::local_stats::record_session(session, "synced", "").ok();
+                crate::local_stats::mark_uploaded(&event_ids).ok();
                 total_new += result.new_count;
                 total_dedup += result.dedup_count;
 
-                // Accumulate today tokens
-                for hb in &session.heartbeats {
+                for hb in &heartbeats {
                     if hb.event_ts >= today_start {
                         batch_today_input += hb.input_tokens;
                         batch_today_output += hb.output_tokens;
@@ -149,14 +166,19 @@ pub async fn run_sync(
                 }
             }
             Err(e) => {
-                crate::local_stats::record_session(session, "failed", &e).ok();
-                // Skip failed session, its offset stays uncommitted so it'll retry next sync
-                eprintln!(
-                    "[wakatoken] session {} failed, skipping: {e}",
-                    session.path.display()
-                );
+                crate::local_stats::mark_failed(&event_ids, &e).ok();
+                eprintln!("[wakatoken] batch failed, skipping: {e}");
+                break;
             }
         }
+
+        pending = match crate::local_stats::pending_heartbeats(100) {
+            Ok(items) => items,
+            Err(e) => {
+                eprintln!("[wakatoken] pending query failed: {e}");
+                Vec::new()
+            }
+        };
     }
 
     crate::tray::set_syncing(false);
