@@ -25,15 +25,16 @@ fn collect_and_report_smoke() {
         return;
     }
 
-    let credentials = wakatoken_client_lib::credentials::AuthCredentials::load();
-    if !credentials.signed_in() {
-        eprintln!("SKIP upload: no authentication configured.");
-        return;
-    }
-
     // Upload first 3 files only for smoke test
     let rt = tokio::runtime::Runtime::new().unwrap();
     let client = reqwest::Client::new();
+    let access_token = match rt.block_on(wakatoken_client_lib::auth::access_token(&client)) {
+        Ok(token) => token,
+        Err(error) => {
+            eprintln!("SKIP upload: {error}");
+            return;
+        }
+    };
     for (i, session) in all_sessions.iter().take(3).enumerate() {
         let n = session.heartbeats.len();
         eprintln!(
@@ -43,7 +44,7 @@ fn collect_and_report_smoke() {
         );
         let result = rt.block_on(wakatoken_client_lib::reporter::send_heartbeats(
             &client,
-            &credentials.access_token,
+            &access_token,
             session.heartbeats.clone(),
         ));
         match result {

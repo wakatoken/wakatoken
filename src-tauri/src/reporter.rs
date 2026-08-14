@@ -22,6 +22,7 @@ pub async fn send_heartbeats(
             .post(&url)
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {access_token}"))
+            .header("X-WakaToken-Client-Version", env!("CARGO_PKG_VERSION"))
             .json(&chunk)
             .send()
             .await

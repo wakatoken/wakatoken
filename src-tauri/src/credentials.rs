@@ -1,32 +1,62 @@
+use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+
+const SERVICE: &str = "com.wakatoken.client";
+const ACCOUNT: &str = "realmroot-oauth";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuthCredentials {
     #[serde(default)]
     pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: String,
+    #[serde(default)]
+    pub expires_at: i64,
 }
 
 impl AuthCredentials {
     pub fn load() -> Self {
-        let path = credentials_path();
-        fs::read_to_string(&path)
+        let entry = match Entry::new(SERVICE, ACCOUNT) {
+            Ok(entry) => entry,
+            Err(_) => return Self::load_legacy(),
+        };
+        match entry.get_password() {
+            Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+            Err(_) => Self::load_legacy(),
+        }
+    }
+
+    fn load_legacy() -> Self {
+        let path = legacy_credentials_path();
+        let credentials = fs::read_to_string(&path)
             .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .and_then(|json| serde_json::from_str::<Self>(&json).ok())
+            .unwrap_or_default();
+        if credentials.signed_in() && credentials.save().is_ok() {
+            let _ = fs::remove_file(path);
+        }
+        credentials
     }
 
     pub fn save(&self) -> Result<(), String> {
-        let path = credentials_path();
-        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(&path, json).map_err(|e| e.to_string())
+        let json = serde_json::to_string(self).map_err(|error| error.to_string())?;
+        Entry::new(SERVICE, ACCOUNT)
+            .map_err(|error| error.to_string())?
+            .set_password(&json)
+            .map_err(|error| error.to_string())
     }
 
     pub fn clear() -> Result<(), String> {
-        let path = credentials_path();
+        let entry = Entry::new(SERVICE, ACCOUNT).map_err(|error| error.to_string())?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        let path = legacy_credentials_path();
         if path.exists() {
-            fs::remove_file(&path).map_err(|e| e.to_string())?;
+            fs::remove_file(path).map_err(|error| error.to_string())?;
         }
         Ok(())
     }
@@ -36,12 +66,11 @@ impl AuthCredentials {
     }
 }
 
-fn credentials_path() -> PathBuf {
-    let dir = dirs::config_dir()
+fn legacy_credentials_path() -> PathBuf {
+    dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("com.wakatoken.client");
-    fs::create_dir_all(&dir).ok();
-    dir.join("credentials.json")
+        .join(SERVICE)
+        .join("credentials.json")
 }
 
 #[cfg(test)]
@@ -49,25 +78,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_access_token_is_empty() {
-        let credentials = AuthCredentials::default();
-        assert_eq!(credentials.access_token, "");
-        assert!(!credentials.signed_in());
+    fn default_is_signed_out() {
+        assert!(!AuthCredentials::default().signed_in());
     }
 
     #[test]
-    fn serializes_access_token() {
+    fn serializes_refresh_and_expiry() {
         let credentials = AuthCredentials {
-            access_token: "access-token".to_string(),
+            access_token: "access".into(),
+            refresh_token: "refresh".into(),
+            expires_at: 123,
         };
-        let json = serde_json::to_string(&credentials).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["access_token"].as_str().unwrap(), "access-token");
-    }
-
-    #[test]
-    fn deserializes_missing_access_token_as_empty_string() {
-        let credentials: AuthCredentials = serde_json::from_str(r#"{}"#).unwrap();
-        assert_eq!(credentials.access_token, "");
+        let value = serde_json::to_value(credentials).unwrap();
+        assert_eq!(value["refresh_token"], "refresh");
+        assert_eq!(value["expires_at"], 123);
     }
 }

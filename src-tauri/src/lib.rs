@@ -1,4 +1,5 @@
 mod app_menu;
+pub mod auth;
 pub mod auto_update;
 pub mod collector;
 pub mod config;
@@ -16,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, RunEvent};
 
-pub const BASE_URL: &str = "https://wkt.tftt.cc";
+pub const BASE_URL: &str = "https://wakatoken.com";
 
 type SharedCollectors = Arc<Vec<Box<dyn collector::Collector>>>;
 static LOCAL_STATS_WRITE_LOCK: Mutex<()> = Mutex::new(());
@@ -37,11 +38,6 @@ pub struct DeviceCodeResponse {
     #[serde(rename = "expiresIn", alias = "expires_in")]
     pub expires_in: u64,
     pub interval: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct TokenResponse {
-    access_token: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -78,14 +74,9 @@ struct ScanProgressPayload<'a> {
 }
 
 #[derive(Debug, Deserialize)]
-struct SessionResponse {
-    user: Option<SessionUser>,
-}
-
-#[derive(Debug, Deserialize)]
 struct SessionUser {
-    name: Option<String>,
-    email: Option<String>,
+    name: String,
+    email: String,
     image: Option<String>,
 }
 
@@ -124,17 +115,15 @@ fn sign_out() -> Result<AppConfig, String> {
 
 #[tauri::command]
 async fn get_account() -> Result<AccountInfo, String> {
-    let credentials = AuthCredentials::load();
-    if !credentials.signed_in() {
-        return Ok(signed_out_account());
-    }
-
-    let resp = reqwest::Client::new()
-        .get(format!("{BASE_URL}/api/auth/get-session"))
-        .header(
-            "Authorization",
-            format!("Bearer {}", credentials.access_token),
-        )
+    let client = reqwest::Client::new();
+    let access_token = match auth::access_token(&client).await {
+        Ok(token) => token,
+        Err(_) => return Ok(signed_out_account()),
+    };
+    let resp = client
+        .get(format!("{BASE_URL}/api/v1/me"))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("X-WakaToken-Client-Version", env!("CARGO_PKG_VERSION"))
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -143,15 +132,12 @@ async fn get_account() -> Result<AccountInfo, String> {
         return Ok(signed_out_account());
     }
 
-    let session: SessionResponse = resp.json().await.map_err(|e| e.to_string())?;
-    let Some(user) = session.user else {
-        return Ok(signed_out_account());
-    };
+    let user: SessionUser = resp.json().await.map_err(|e| e.to_string())?;
 
     Ok(AccountInfo {
         signed_in: true,
-        name: user.name.unwrap_or_else(|| "Signed in".to_string()),
-        email: user.email.unwrap_or_default(),
+        name: user.name,
+        email: user.email,
         image: user.image,
     })
 }
@@ -402,40 +388,7 @@ fn emit_scan_progress(app: &Option<tauri::AppHandle>, progress: ScanProgressPayl
 #[tauri::command]
 async fn start_device_auth() -> Result<DeviceCodeResponse, String> {
     let client = reqwest::Client::new();
-    let url = format!("{BASE_URL}/api/auth/device/code");
-
-    let resp = client
-        .post(&url)
-        .json(&serde_json::json!({ "client_id": "wkt-client" }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if !resp.status().is_success() {
-        return Err(response_error("Failed to get device code", resp).await);
-    }
-
-    let data: DeviceCodeResponse = resp.json().await.map_err(|e| e.to_string())?;
-
-    let machine_id = crate::heartbeat::get_machine_id()?;
-    let hostname = get_hostname()?;
-
-    let link_resp = client
-        .post(format!("{BASE_URL}/api/v1/device/link"))
-        .json(&serde_json::json!({
-            "deviceCode": data.device_code,
-            "deviceId": machine_id,
-            "hostname": hostname,
-        }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if !link_resp.status().is_success() {
-        return Err(response_error("Failed to link device", link_resp).await);
-    }
-
-    Ok(data)
+    auth::start_device_authorization(&client).await
 }
 
 fn get_hostname() -> Result<String, String> {
@@ -476,31 +429,25 @@ fn platform_hostname() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn poll_device_auth(device_code: String) -> Result<bool, String> {
+async fn poll_device_auth(device: DeviceCodeResponse) -> Result<bool, String> {
     let client = reqwest::Client::new();
-    let url = format!("{BASE_URL}/api/auth/device/token");
-
-    let resp = client
-        .post(&url)
+    auth::complete_device_authorization(&client, &device).await?;
+    let access_token = auth::access_token(&client).await?;
+    let response = client
+        .put(format!("{BASE_URL}/api/v1/devices/current"))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("X-WakaToken-Client-Version", env!("CARGO_PKG_VERSION"))
         .json(&serde_json::json!({
-            "client_id": "wkt-client",
-            "device_code": device_code,
-            "grant_type": "urn:ietf:params:oauth:grant-type:device_code"
+            "deviceId": crate::heartbeat::get_machine_id()?,
+            "hostname": get_hostname()?,
         }))
         .send()
         .await
-        .map_err(|e| e.to_string())?;
-
-    if resp.status().is_success() {
-        let data: TokenResponse = resp.json().await.map_err(|e| e.to_string())?;
-        AuthCredentials {
-            access_token: data.access_token,
-        }
-        .save()?;
-        Ok(true)
-    } else {
-        Ok(false)
+        .map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(response_error("Failed to register device", response).await);
     }
+    Ok(true)
 }
 
 async fn response_error(prefix: &str, resp: reqwest::Response) -> String {
