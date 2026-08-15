@@ -389,21 +389,11 @@ deviceAuthBtn.addEventListener("click", async () => {
     await open(await absoluteUrl(verificationUri));
     deviceAuthBtn.textContent = "Waiting...";
 
-    const deadline = Date.now() + data.expiresIn * 1000;
-    const interval = Math.max(data.interval, 1) * 1000;
-    while (Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, interval));
-      if (await invoke("poll_device_auth", { deviceCode: data.deviceCode })) {
-        await loadConfig();
-        await loadAccount();
-        deviceAuthResult.textContent = "Signed in";
-        deviceAuthResult.className = "test-result success";
-        return;
-      }
-    }
-
-    deviceAuthResult.textContent = "Device code expired";
-    deviceAuthResult.className = "test-result error";
+    await invoke("poll_device_auth", { device: data });
+    await loadConfig();
+    await loadAccount();
+    deviceAuthResult.textContent = "Signed in";
+    deviceAuthResult.className = "test-result success";
   } catch (e) {
     deviceAuthResult.textContent = e;
     deviceAuthResult.className = "test-result error";

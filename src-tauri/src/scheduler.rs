@@ -1,6 +1,5 @@
 use crate::collector::{self, Collector};
 use crate::config::AppConfig;
-use crate::credentials::AuthCredentials;
 use crate::reporter;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -119,8 +118,7 @@ pub async fn run_sync(
     };
 
     let config = AppConfig::load();
-    let credentials = AuthCredentials::load();
-    if !credentials.signed_in() {
+    if !crate::credentials::AuthCredentials::load().signed_in() {
         let mut s = status.lock().await;
         s.last_sync_ok = false;
         s.last_error = "Authentication not configured".to_string();
@@ -210,12 +208,23 @@ pub async fn run_sync(
 
     // 2. Upload pending local events, then mark their upload state.
     let client = reqwest::Client::new();
+    let access_token = match crate::auth::access_token(&client).await {
+        Ok(token) => token,
+        Err(error) => {
+            let mut s = status.lock().await;
+            s.last_sync_ok = false;
+            s.last_error = error;
+            emit_error(app, &s.last_error);
+            return;
+        }
+    };
     let today_start = today_start_millis();
     let mut total_new = 0u64;
     let mut total_dedup = 0u64;
     let mut batch_today_input = 0u64;
     let mut batch_today_output = 0u64;
     let mut uploaded_events = 0u64;
+    let mut upload_error = None;
     let upload_started_at = std::time::Instant::now();
 
     while !pending.is_empty() {
@@ -233,9 +242,7 @@ pub async fn run_sync(
         let event_ids: Vec<String> = pending.iter().map(|item| item.event_id.clone()).collect();
         let heartbeats: Vec<_> = pending.iter().map(|item| item.heartbeat.clone()).collect();
 
-        match reporter::send_heartbeats(&client, &credentials.access_token, heartbeats.clone())
-            .await
-        {
+        match reporter::send_heartbeats(&client, &access_token, heartbeats.clone()).await {
             Ok(result) => {
                 crate::local_stats::mark_uploaded(&event_ids).ok();
                 uploaded_events = next_uploaded;
@@ -252,6 +259,7 @@ pub async fn run_sync(
             Err(e) => {
                 crate::local_stats::mark_failed(&event_ids, &e).ok();
                 eprintln!("[wakatoken] upload failed after {uploaded_events}/{total_pending}: {e}");
+                upload_error = Some(e);
                 break;
             }
         }
@@ -260,12 +268,19 @@ pub async fn run_sync(
             Ok(items) => items,
             Err(e) => {
                 eprintln!("[wakatoken] pending query failed: {e}");
+                upload_error = Some(e);
                 Vec::new()
             }
         };
     }
 
     crate::tray::set_syncing(false);
+    if let Some(error) = upload_error {
+        emit_error(app, &error);
+        let mut s = status.lock().await;
+        record_sync_failure(&mut s, error);
+        return;
+    }
     let msg = format!("{total_new} new, {total_dedup} dedup");
     eprintln!("[wakatoken] done: {msg}");
     emit_done(app, &msg);
@@ -277,6 +292,12 @@ pub async fn run_sync(
     reset_if_new_day(&mut s, today_start);
     s.today_input_tokens += batch_today_input;
     s.today_output_tokens += batch_today_output;
+}
+
+fn record_sync_failure(status: &mut SyncStatus, error: String) {
+    status.last_sync_ts = chrono::Utc::now().timestamp();
+    status.last_sync_ok = false;
+    status.last_error = error;
 }
 
 fn upload_eta(started_at: std::time::Instant, uploaded: u64, total: u64) -> String {
@@ -349,4 +370,24 @@ fn today_start_millis() -> i64 {
         .and_local_timezone(chrono::Local)
         .unwrap()
         .timestamp_millis()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upload_failure_remains_visible_in_sync_status() {
+        let mut status = SyncStatus {
+            last_sync_ok: true,
+            last_error: String::new(),
+            ..SyncStatus::default()
+        };
+
+        record_sync_failure(&mut status, "HTTP 401: invalid token".into());
+
+        assert!(!status.last_sync_ok);
+        assert_eq!(status.last_error, "HTTP 401: invalid token");
+        assert!(status.last_sync_ts > 0);
+    }
 }
