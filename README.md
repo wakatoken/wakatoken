@@ -104,6 +104,20 @@ cargo test
 npm run tauri build
 ```
 
+### Release
+
+The version in `package.json` is the canonical application version. Update all
+generated version fields and verify them before committing:
+
+```bash
+npm run app-version:set -- 1.2.0
+npm run app-version:check
+```
+
+After the version commit is merged into `main`, tag that exact commit with the
+same version (for example, `v1.2.0`). The release workflow rejects tags that do
+not match the committed application version.
+
 ## Project Layout
 
 ```text

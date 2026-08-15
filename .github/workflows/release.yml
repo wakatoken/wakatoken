@@ -42,6 +42,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Add Rust target
@@ -58,68 +63,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      - name: Sync release version
-        shell: bash
-        run: |
-          node <<'NODE'
-          const fs = require("node:fs");
-
-          const version = process.env.GITHUB_REF_NAME.replace(/^v/, "");
-
-          function writeJson(path, update) {
-            const value = JSON.parse(fs.readFileSync(path, "utf8"));
-            update(value);
-            fs.writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
-          }
-
-          function replaceRequired(path, pattern, replacement) {
-            const value = fs.readFileSync(path, "utf8");
-            if (!pattern.test(value)) {
-              throw new Error(`Version pattern not found in ${path}`);
-            }
-            fs.writeFileSync(path, value.replace(pattern, replacement));
-          }
-
-          writeJson("package.json", (value) => {
-            value.version = version;
-          });
-
-          writeJson("package-lock.json", (value) => {
-            value.version = version;
-            value.packages[""].version = version;
-          });
-
-          writeJson("src-tauri/tauri.conf.json", (value) => {
-            value.version = version;
-          });
-
-          replaceRequired(
-            "src-tauri/Cargo.toml",
-            /^version = ".*"$/m,
-            `version = "${version}"`,
-          );
-
-          replaceRequired(
-            "src-tauri/Cargo.lock",
-            /(\[\[package\]\]\r?\nname = "wakatoken"\r?\nversion = ")[^"]+(")/,
-            `$1${version}$2`,
-          );
-          NODE
-
-      - name: Install Node.js dependencies
-        run: npm install
-
       - name: Verify release version
         shell: bash
-        run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          TAURI_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          CARGO_VERSION=$(cargo metadata --manifest-path src-tauri/Cargo.toml --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "wakatoken") | .version')
+        run: npm run app-version:check -- "${GITHUB_REF_NAME#v}"
 
-          test "$PACKAGE_VERSION" = "$TAG_VERSION"
-          test "$TAURI_VERSION" = "$TAG_VERSION"
-          test "$CARGO_VERSION" = "$TAG_VERSION"
+      - name: Install Node.js dependencies
+        run: npm ci
 
       - uses: tauri-apps/tauri-action@v0
         env:

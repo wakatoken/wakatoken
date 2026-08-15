@@ -1,8 +1,10 @@
 {
   "name": "wakatoken",
   "private": true,
-  "version": "1.1.1",
+  "version": "1.1.5",
   "scripts": {
+    "app-version:check": "node scripts/app-version.mjs check",
+    "app-version:set": "node scripts/app-version.mjs set",
     "prepare": "lefthook install",
     "tauri": "tauri"
   },
